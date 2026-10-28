@@ -262,25 +262,34 @@ export default Plugin.define({
         }
 
         const existing = await prepareShare(sessionID, pluginOptions)
-        if (existing) return { consentRequired: false, share: existing }
         const consent = (await ctx.storage.get(SHARE_CONSENT_KEY)) === true
+        if (existing && found) {
+          // The local sync secret is still available even though the stored
+          // expiry has passed; syncing will refresh it.
+          startWatcher(sessionID, { ...found.stored, directory: found.directory }, false)
+          return { consentRequired: false, share: existing }
+        }
+        // A remote share without its local sync secret cannot be updated. The
+        // next createShare call updates the same server-side share and returns
+        // a fresh secret, so ask for consent and let the caller recreate it.
         return { consentRequired: !consent, share: null }
       },
       share: async (input) => {
         const { sessionID, consent } = input as { sessionID: string; consent?: boolean }
         const existing = await prepareShare(sessionID, pluginOptions)
-        if (existing) {
-          const found = await findStoredShare(sessionID)
-          if (found) {
-            startWatcher(
-              sessionID,
-              { ...found.stored, directory: found.directory },
-              true,
-            )
-          }
+        const found = await findStoredShare(sessionID)
+        if (existing && found) {
+          startWatcher(
+            sessionID,
+            { ...found.stored, directory: found.directory },
+            true,
+          )
           return existing
         }
 
+        // If a remote share exists without its local sync secret, fall through:
+        // createShare updates the same server-side share and returns a fresh
+        // secret.
         const allowed = (await ctx.storage.get(SHARE_CONSENT_KEY)) === true || consent === true
         if (!allowed) throw new Error("Share consent required")
         if (consent === true) await ctx.storage.set(SHARE_CONSENT_KEY, true)
