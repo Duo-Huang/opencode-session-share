@@ -1,0 +1,10 @@
+**/node_modules
+**/dist
+*.log
+data
+.env
+.env.*
+.git
+.github
+docs
+plugin

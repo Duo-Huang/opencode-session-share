@@ -1,0 +1,46 @@
+services:
+  opencode-session-share:
+    image: ghcr.io/duo-huang/opencode-session-share:${SHARE_VERSION:-latest}
+    container_name: opencode-session-share
+    restart: unless-stopped
+    ports:
+      - "47821:47821"
+    environment:
+      PORT: "47821"
+      TZ: Asia/Shanghai
+      HOME: /tmp
+      SHARE_DB_PATH: /data/shares.db
+      SHARE_PUBLIC_BASE_URL: ${SHARE_PUBLIC_BASE_URL}
+      SHARE_KEYS: ${SHARE_KEYS}
+      SHARE_SESSION_SALT: ${SHARE_SESSION_SALT}
+      SHARE_DEFAULT_TTL_DAYS: ${SHARE_DEFAULT_TTL_DAYS:-1}
+      SHARE_MAX_TTL_DAYS: ${SHARE_MAX_TTL_DAYS:-30}
+      SHARE_MAX_BYTES: ${SHARE_MAX_BYTES:-15728640}
+      SHARE_VIEW_MAX_BYTES: ${SHARE_VIEW_MAX_BYTES:-131072}
+      SHARE_DB_MAX_MB: ${SHARE_DB_MAX_MB:-1024}
+      CF_ZONE_ID: ${CF_ZONE_ID:-}
+      CF_CACHE_PURGE_TOKEN: ${CF_CACHE_PURGE_TOKEN:-}
+    volumes:
+      - opencode-session-share-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:47821/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  opencode-session-share-data:
