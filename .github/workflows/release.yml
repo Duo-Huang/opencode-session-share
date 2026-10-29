@@ -64,9 +64,10 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
 
+      - run: npm install -g npm@latest
       - run: bun install --frozen-lockfile
 
       - name: Check tag matches package version
@@ -77,11 +78,4 @@ jobs:
           test "$tag" = "$version"
 
       - name: Publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "NPM_TOKEN is not configured; skipping npm publish."
-            exit 0
-          fi
-          npm publish --access public --provenance
+        run: npm publish --access public --provenance
