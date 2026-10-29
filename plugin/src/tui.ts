@@ -62,7 +62,8 @@ export default Plugin.define({
       commands: [
         {
           id: "opencode-session-share.share",
-          title: "Share session",
+          title: "Share session via public link",
+          description: "Create or reuse a link anyone on the internet can open",
           group: "Session",
           slash: { name: "share" },
           run: async () => {
@@ -82,8 +83,10 @@ export default Plugin.define({
 
               if (prepared.consentRequired) {
                 const ok = await context.ui.dialog.confirm({
-                  title: "Share Session",
-                  message: "Are you sure you want to share it?",
+                  title: "Share session publicly?",
+                  message:
+                    "Anyone on the internet with the link can view this session, including tool output and shell commands.",
+                  label: { confirm: "Share publicly", cancel: "Cancel" },
                 })
                 if (ok !== true) return
               }
@@ -100,7 +103,8 @@ export default Plugin.define({
         },
         {
           id: "opencode-session-share.unshare",
-          title: "Unshare session",
+          title: "Revoke public share link",
+          description: "Revoke the public link and stop syncing this session",
           group: "Session",
           slash: { name: "unshare" },
           run: async () => {

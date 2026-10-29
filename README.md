@@ -9,6 +9,8 @@ Share an OpenCode session through a self-hosted, read-only web page.
 
 The viewer shows the session's **active context** — the messages after the last compaction — plus a collapsible compaction summary. It is not a full pre-compaction history export.
 
+> **Requirements:** OpenCode **v2 only**. The plugin uses the OpenCode v2 server, TUI, and RPC plugin APIs. `/share` and `/unshare` are TUI commands only; the Desktop/Web app composer does not expose them yet.
+
 ## Features
 
 - Share a session with one command and copy the URL automatically.
@@ -82,7 +84,19 @@ The `SHARE_PUBLIC_BASE_URL` value is used in returned share URLs. It must be the
 
 ## Install the plugin
 
-Add the plugin to the global `~/.config/opencode/opencode.jsonc`:
+### Install with the CLI
+
+```bash
+opencode plugin add opencode-session-share-plugin
+```
+
+The CLI only installs the package and adds a string entry:
+
+```jsonc
+"plugins": ["opencode-session-share-plugin"]
+```
+
+This plugin requires options, so replace that string with an object:
 
 ```jsonc
 {
@@ -99,12 +113,41 @@ Add the plugin to the global `~/.config/opencode/opencode.jsonc`:
 }
 ```
 
+Do not keep both the string entry and the object entry.
+
+### Manual install
+
+Add the object above directly to `~/.config/opencode/opencode.jsonc`.
+
 - `endpoint` is the service base URL. It is required.
 - `keyId` must match the id before `:` in `SHARE_KEYS`.
 - `key` must match the secret after `:` in `SHARE_KEYS`.
 - For local testing, use `endpoint: "http://localhost:47821"`.
 
 The plugin sends `Authorization: Bearer <key>` and `x-share-key-id`. The service checks both against `SHARE_KEYS`.
+
+### Upgrade
+
+For an unpinned package entry:
+
+```bash
+opencode plugin check
+opencode plugin update opencode-session-share-plugin
+```
+
+Then run `/reload`, or `opencode service restart` if the TUI did not pick it up.
+
+`opencode plugin update` updates the installed npm package but does **not**
+modify `options` in `opencode.jsonc`. Your endpoint, keyId, and key stay as
+configured.
+
+If you pin an exact version:
+
+```jsonc
+"package": "opencode-session-share-plugin@0.1.3"
+```
+
+`opencode plugin update` skips it. Change the version manually to upgrade.
 
 ### Commands
 
@@ -115,7 +158,7 @@ In the TUI:
 /unshare
 ```
 
-On first share, the TUI asks for confirmation. Later shares reuse the stored consent. `/share` copies the URL to the clipboard. If clipboard access fails, the toast shows the URL so you can copy it manually.
+On the first `/share` for this OpenCode installation, the TUI asks for confirmation and warns that the link is public. Consent is stored globally per OpenCode installation; later shares, including in different sessions, do not prompt again. `/unshare` does not reset that consent. Upgrading from an older consent version prompts once again for the updated public-link warning. `/share` copies the URL to the clipboard. If clipboard access fails, the toast shows the URL so you can copy it manually.
 
 The Desktop/Web app composer does not currently expose these commands. The plugin ships TUI commands only; a GUI part is a separate future change.
 

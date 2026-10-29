@@ -30,7 +30,7 @@ type Watcher = {
   running: boolean
 }
 
-const SHARE_CONSENT_KEY = "share_consent"
+const SHARE_CONSENT_KEY = "share_consent_v2"
 
 export default Plugin.define({
   id: "opencode-session-share",
