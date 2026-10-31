@@ -18,8 +18,8 @@ docs/      User-facing self-hosting and design notes
 ## Setup
 
 ```bash
-bun install --cwd plugin
-bun install --cwd service
+(cd plugin && bun install)
+(cd service && bun install)
 ```
 
 ## Checks
