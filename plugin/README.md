@@ -80,9 +80,11 @@ If you pin an exact version:
 
 These are TUI commands. The Desktop/Web app composer does not currently expose them.
 
-## Service setup
+## Self-hosting
 
-Use the [self-host guide](https://github.com/Duo-Huang/opencode-session-share#self-host-the-service). The short version:
+See the [self-hosting guide](https://github.com/Duo-Huang/opencode-session-share/blob/main/docs/self-hosting.md) for service setup, environment variables, HTTPS, and optional Cloudflare caching.
+
+The short version:
 
 ```bash
 git clone https://github.com/Duo-Huang/opencode-session-share.git
@@ -100,13 +102,10 @@ Shares contain the session's active context, including tool inputs/outputs and s
 
 `/unshare` revokes the server-side share but cannot delete copies already saved by recipients or caches.
 
-## Development
+## Contributing
 
-```bash
-bun install
-bun run typecheck
-bun test
-```
+Development setup, tests, and maintainer release steps are in
+[CONTRIBUTING.md](https://github.com/Duo-Huang/opencode-session-share/blob/main/CONTRIBUTING.md).
 
 ## License
 
