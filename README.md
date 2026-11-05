@@ -151,7 +151,7 @@ Then run `/reload`, or restart the OpenCode service if needed.
 If you pin an exact version:
 
 ```jsonc
-"package": "opencode-session-share-plugin@0.1.3"
+"package": "opencode-session-share-plugin@0.1.4"
 ```
 
 `opencode plugin update` skips it. Change the version manually to upgrade.

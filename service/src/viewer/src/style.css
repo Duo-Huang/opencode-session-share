@@ -191,6 +191,18 @@ body {
   margin: 0;
 }
 
+.repo-link {
+  color: var(--ink-muted);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.repo-link:hover {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .footer-warning {
   align-self: flex-start;
   padding: 0.12rem 0.5rem;
