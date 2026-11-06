@@ -74,21 +74,39 @@ Run `/reload` in the TUI, then test `/share` and `/unshare`.
 
 ## Release process
 
-Releases are maintainer-only. A release is driven by a tag:
+Releases are maintainer-only. Use the smallest release that matches the change:
+
+| Change | Tag | Image | npm |
+|---|---|---|---|
+| Plugin/TUI behavior, protocol, or both sides | `vX.Y.Z` | yes | yes |
+| Viewer/service only | `service-vX.Y.Z` | yes | no |
+| Docs, CI, or repo metadata only | — | no | no |
+
+A viewer/service change still ships a new image. Your own deployment pulls the
+same GHCR artifact as self-hosters.
+
+Full release:
 
 ```bash
+# Bump plugin/package.json to X.Y.Z first.
 git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-The tag workflow:
+Service-only release:
 
-- builds and publishes the multi-arch GHCR image;
-- publishes `opencode-session-share-plugin` to npm through Trusted Publishing
-  (OIDC).
+```bash
+git tag service-vX.Y.Z
+git push origin service-vX.Y.Z
+```
 
-The tag must match `plugin/package.json` version. The workflow verifies this.
-No `NPM_TOKEN` is required.
+Both tags build and publish the multi-arch GHCR image and update `latest`.
+Full releases also publish `opencode-session-share-plugin` to npm through
+Trusted Publishing (OIDC); the workflow checks that `vX.Y.Z` matches
+`plugin/package.json`. No `NPM_TOKEN` is required.
+
+Do not reuse the same `X.Y.Z` for both a service-only and a full release.
+Service-only tags leave `plugin/package.json` unchanged.
 
 ### Manual npm fallback
 
