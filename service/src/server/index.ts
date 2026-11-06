@@ -253,6 +253,7 @@ app.use("*", async (c, next) => {
     c.req.path.startsWith("/assets/") ||
     c.req.path.startsWith("/s/") ||
     c.req.path.startsWith("/api/public/shares/") ||
+    c.req.path === "/favicon.svg" ||
     c.req.path === "/robots.txt"
   ) {
     return
@@ -278,6 +279,14 @@ app.use(
     onFound: (_path, c) => {
       c.header("cache-control", "public, max-age=31536000, immutable")
     },
+  }),
+)
+
+app.get(
+  "/favicon.svg",
+  serveStatic({
+    root: viewerDir,
+    onFound: (_path, c) => c.header("cache-control", "public, max-age=86400"),
   }),
 )
 

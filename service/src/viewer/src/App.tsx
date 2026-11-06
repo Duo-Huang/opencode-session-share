@@ -473,6 +473,11 @@ export function App() {
   let directoryPanel: HTMLElement | undefined
 
   createEffect(() => {
+    const current = share()
+    document.title = current?.title ? `${current.title} · OpenCode Session` : "OpenCode Session"
+  })
+
+  createEffect(() => {
     if (!directoryOpen()) return
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target
