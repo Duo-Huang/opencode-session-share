@@ -58,7 +58,7 @@ import {
 } from "./render"
 
 const app = new Hono()
-const SHARE_API_VERSION = "2"
+const SHARE_API_VERSION = "3"
 const viewerDir = join(import.meta.dir, "../../dist/viewer")
 const viewerIndex = join(viewerDir, "index.html")
 const revokedIds = new Map<string, number>()
@@ -660,6 +660,31 @@ app.get("/api/public/shares/:id", async (c) => {
   }
   const fresh = c.req.query("fresh") !== undefined
   return c.json(payload, 200, fresh ? noStore() : publicApiHeaders(config.edgeCache))
+})
+
+app.get("/api/public/shares/:id/status", async (c) => {
+  const id = c.req.param("id")
+  if (!/^[A-Za-z0-9_-]{16,64}$/.test(id)) return c.json({ error: "not_found" }, 404, noStore())
+  if (revokedIds.has(id)) return c.json({ error: "gone" }, 410, goneHeaders())
+  if (!rateLimit(`public-status:${clientIp(c)}`, 120, 60_000)) {
+    return c.json({ error: "rate_limited" }, 429, noStore())
+  }
+
+  const row = findById(id)
+  if (!row) return c.json({ error: "not_found" }, 404, noStore())
+  if (row.revoked_at || row.expires_at <= now()) {
+    if (!row.revoked_at) await revokeShare(id)
+    return c.json({ error: "gone" }, 410, goneHeaders())
+  }
+
+  return c.json(
+    {
+      updatedAt: row.updated_at,
+      expiresAt: row.expires_at,
+    },
+    200,
+    noStore(),
+  )
 })
 
 app.get("/api/public/shares/:id/messages", async (c) => {

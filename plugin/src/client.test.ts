@@ -118,7 +118,7 @@ describe("plugin HTTP client", () => {
     globalThis.fetch = (async () =>
       new Response(JSON.stringify({ ok: true }), {
         status: 200,
-        headers: { "content-type": "application/json", "x-share-api-version": "3" },
+        headers: { "content-type": "application/json", "x-share-api-version": "4" },
       })) as unknown as typeof fetch
 
     await expect(createShare(snapshot, "pk", options)).rejects.toThrow(/API version/)

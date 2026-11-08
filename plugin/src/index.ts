@@ -43,6 +43,7 @@ const SHARE_CONSENT_KEY = "share_consent_v2"
 // snapshot is also flushed on session.idle.
 const RELEVANT_EVENTS = new Set<string>([
   "session.idle",
+  "session.status",
   "session.deleted",
   "session.renamed",
   "session.metadata.updated",
@@ -66,6 +67,7 @@ export default Plugin.define({
   async setup(ctx) {
     const pluginOptions = ctx.options as PluginOptions
     const shares = new Map<string, ShareState>()
+    const runningSessions = new Map<string, boolean>()
     const controller = new AbortController()
 
     const configuredEndpoint = () => {
@@ -178,12 +180,19 @@ export default Plugin.define({
         (info as { location?: { directory?: string } }).location?.directory ??
         fallbackDirectory
       const messages = (await ctx.session.context({ sessionID })) as readonly any[]
+      const time = (info as { time?: { idle?: number; updated?: number } }).time
+      const derivedRunning =
+        typeof time?.idle === "number" && typeof time.updated === "number"
+          ? time.updated > time.idle
+          : undefined
+      const running = runningSessions.get(sessionID) ?? derivedRunning
       return {
         snapshot: normalizeSession(
           ctx.app,
           { directory: sessionDirectory },
           info,
           messages,
+          running,
         ),
         sessionDirectory,
       }
@@ -201,6 +210,7 @@ export default Plugin.define({
       const key =
         state?.storageKey ?? shareKey(directory ?? ctx.location.directory, sessionID)
       stopState(sessionID)
+      runningSessions.delete(sessionID)
       try {
         await ctx.storage.remove(key)
       } catch (error) {
@@ -299,6 +309,7 @@ export default Plugin.define({
       const directory = state?.directory ?? found?.directory ?? ctx.location.directory
       const key = state?.storageKey ?? found?.key ?? shareKey(directory, sessionID)
       stopState(sessionID)
+      runningSessions.delete(sessionID)
 
       try {
         const result = await revokeBySession(sessionID, pluginOptions)
@@ -435,8 +446,11 @@ export default Plugin.define({
 
         // The initial upload is bounded for latency. If it was compacted, upload
         // the full snapshot once now; this is a one-shot completion, not a
-        // periodic background sync.
-        if (compacted !== snapshot) schedule(sessionID, true)
+        // periodic background sync. Re-sync when the service supports the
+        // running flag so the first snapshot can show live activity.
+        if (compacted !== snapshot || runningSessions.get(sessionID) === true) {
+          schedule(sessionID, true)
+        }
 
         return { id: result.id, url: result.url, expiresAt: result.expiresAt }
       },
@@ -484,10 +498,27 @@ export default Plugin.define({
                 : undefined)
             if (!sessionID) continue
 
+            if (event.type === "session.status") {
+              const status = (data?.status as { type?: string } | undefined)?.type
+              if (status === "busy" || status === "retry") {
+                runningSessions.set(sessionID, true)
+              } else if (status === "idle") {
+                runningSessions.set(sessionID, false)
+              }
+              const state = shares.get(sessionID)
+              if (!state) continue
+              state.lastEventAt = Date.now()
+              schedule(sessionID)
+              continue
+            }
+
             if (event.type === "session.deleted") {
+              runningSessions.delete(sessionID)
               if (shares.has(sessionID)) void unshare(sessionID).catch(() => {})
               continue
             }
+
+            if (event.type === "session.idle") runningSessions.set(sessionID, false)
 
             const state = shares.get(sessionID)
             if (!state) continue

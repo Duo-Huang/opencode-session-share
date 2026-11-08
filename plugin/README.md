@@ -58,12 +58,12 @@ Then run `/reload`, or `opencode service restart` if the TUI did not pick it up.
 
 `opencode plugin update` updates the installed npm package but does **not** modify `options` in `opencode.jsonc`. Your endpoint, keyId, and key stay as configured.
 
-v0.2.0 requires service API version 2 and uses a per-share Ed25519 key for sync. Upgrade the service and plugin together, then share existing sessions again.
+v0.3.0 adds live agent activity metadata and requires service API version 3. Upgrade the service and plugin together.
 
 If you pin an exact version:
 
 ```jsonc
-"package": "opencode-session-share-plugin@0.2.0"
+"package": "opencode-session-share-plugin@0.3.0"
 ```
 
 `opencode plugin update` skips it. Change the version manually to upgrade.

@@ -112,6 +112,8 @@ export type ShareSession = {
   id?: string
   agent?: string
   model?: ModelRef
+  /** True while the agent is still producing this turn. */
+  running?: boolean
 }
 
 export type ShareSnapshot = {

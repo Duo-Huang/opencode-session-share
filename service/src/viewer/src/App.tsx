@@ -52,6 +52,10 @@ type Status = "loading" | "live" | "reconnecting" | "revoked" | "error"
 
 const REPO_URL = "https://github.com/Duo-Huang/opencode-session-share"
 const reconnectDelays = [1000, 2000, 5000, 10000, 30000]
+const STATUS_POLL_MS = 60_000
+const STATUS_RETRY_MS = 5_000
+const STATUS_MAX_MS = 60_000
+const WS_WATCHDOG_MS = 75_000
 
 function SunIcon() {
   return (
@@ -450,6 +454,7 @@ export function App() {
     top: number
   } | null>(null)
   const [loadingPage, setLoadingPage] = createSignal(false)
+  const [loadingTail, setLoadingTail] = createSignal(false)
   const [newMessages, setNewMessages] = createSignal(false)
   const [pendingTarget, setPendingTarget] = createSignal("")
   const [searchQuery, setSearchQuery] = createSignal("")
@@ -467,6 +472,11 @@ export function App() {
   let generation = 0
   let refreshing = false
   let pendingFresh = false
+  let statusTimer: number | undefined
+  let statusDelay = STATUS_POLL_MS
+  let statusChecking = false
+  let statusController: AbortController | undefined
+  let lastFrameAt = 0
   let activeFrame: number | undefined
   let directoryRail: HTMLElement | undefined
   let directoryButton: HTMLButtonElement | undefined
@@ -652,6 +662,7 @@ export function App() {
     if (!current || loadingPage()) return
     const request = ++pageRequest
     setLoadingPage(true)
+    setLoadingTail(true)
     try {
       const data = await fetchPage({ before: current.page.total })
       if (request !== pageRequest) return
@@ -666,6 +677,7 @@ export function App() {
       // Keep the current window.
     } finally {
       if (request === pageRequest) setLoadingPage(false)
+      setLoadingTail(false)
     }
   }
 
@@ -766,6 +778,82 @@ export function App() {
     }
   }
 
+  function clearStatusTimer() {
+    if (statusTimer !== undefined) {
+      window.clearTimeout(statusTimer)
+      statusTimer = undefined
+    }
+  }
+
+  function markRevoked() {
+    closed = true
+    generation++
+    clearStatusTimer()
+    statusController?.abort()
+    statusController = undefined
+    if (reconnectTimer !== undefined) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = undefined
+    }
+    setShare(null)
+    setStatus("revoked")
+    socket?.close()
+  }
+
+  function scheduleStatus(delay = statusDelay) {
+    if (closed || document.visibilityState !== "visible") return
+    clearStatusTimer()
+    statusTimer = window.setTimeout(() => {
+      statusTimer = undefined
+      void checkStatus()
+    }, delay)
+  }
+
+  async function checkStatus() {
+    if (closed || document.visibilityState !== "visible" || statusChecking) return
+    if (status() === "revoked") return
+
+    statusChecking = true
+    statusController?.abort()
+    const controller = new AbortController()
+    statusController = controller
+    try {
+      const response = await fetch(
+        `/api/public/shares/${encodeURIComponent(id)}/status?fresh=${Date.now()}`,
+        { cache: "no-store", signal: controller.signal },
+      )
+      if (closed) return
+      if (response.status === 410 || response.status === 404) {
+        markRevoked()
+        return
+      }
+      if (!response.ok) return
+
+      const data = (await response.json()) as { updatedAt: number; expiresAt: number }
+      if (closed) return
+      const current = share()
+      if (!current || data.updatedAt > current.updatedAt) {
+        await refresh(true)
+      } else {
+        setClock(Date.now())
+      }
+    } catch {
+      // Network failure: keep the current page and retry on the schedule.
+    } finally {
+      if (statusController === controller) statusController = undefined
+      statusChecking = false
+      if (!closed) {
+        if (status() === "reconnecting") {
+          scheduleStatus(statusDelay)
+          statusDelay = Math.min(statusDelay * 2, STATUS_MAX_MS)
+        } else {
+          statusDelay = STATUS_POLL_MS
+          scheduleStatus(STATUS_POLL_MS)
+        }
+      }
+    }
+  }
+
   const refresh = async (fresh = false) => {
     if (refreshing) {
       if (fresh) pendingFresh = true
@@ -777,12 +865,8 @@ export function App() {
       const response = await fetch(`/api/public/shares/${encodeURIComponent(id)}${suffix}`, {
         cache: fresh ? "no-store" : "default",
       })
-      if (response.status === 410) {
-        closed = true
-        generation++
-        setShare(null)
-        setStatus("revoked")
-        socket?.close()
+      if (response.status === 410 || response.status === 404) {
+        markRevoked()
         return
       }
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
@@ -790,7 +874,9 @@ export function App() {
       if (closed) return
       applySnapshot(data)
       setClock(Date.now())
-      setStatus((current) => (current === "revoked" ? current : "live"))
+      setStatus((current) =>
+        current === "revoked" || current === "reconnecting" ? current : "live",
+      )
     } catch (cause) {
       // If the socket already delivered a snapshot, a failed fallback fetch
       // should not replace the page with an error screen.
@@ -823,13 +909,21 @@ export function App() {
     ws.onopen = () => {
       if (currentGeneration !== generation) return
       attempt = 0
+      lastFrameAt = Date.now()
       setStatus("live")
+      statusDelay = STATUS_POLL_MS
       const current = share()
-      if (!current || Date.now() - current.updatedAt > 10_000) void refresh(true)
+      if (!current) {
+        if (!refreshing) void refresh(true)
+        scheduleStatus(STATUS_POLL_MS)
+      } else {
+        void checkStatus()
+      }
     }
 
     ws.onmessage = (event) => {
       if (currentGeneration !== generation) return
+      lastFrameAt = Date.now()
       if (event.data === "pong") return
       if (event.data === "ping") {
         ws.send("pong")
@@ -841,13 +935,11 @@ export function App() {
           applyLiveUpdate(message.data as LiveUpdate)
           setClock(Date.now())
           setStatus("live")
+          statusDelay = STATUS_POLL_MS
+          scheduleStatus(STATUS_POLL_MS)
         }
         if (message.type === "revoked") {
-          closed = true
-          generation++
-          setShare(null)
-          setStatus("revoked")
-          ws.close()
+          markRevoked()
         }
       } catch {
         // Ignore malformed frames.
@@ -858,13 +950,13 @@ export function App() {
       if (currentGeneration !== generation) return
       if (closed) return
       if (event.code === 4100 || event.code === 4410) {
-        closed = true
-        generation++
-        setShare(null)
-        setStatus("revoked")
+        markRevoked()
         return
       }
+      lastFrameAt = 0
       setStatus("reconnecting")
+      statusDelay = STATUS_RETRY_MS
+      void checkStatus()
       const delay = reconnectDelays[Math.min(attempt++, reconnectDelays.length - 1)]
       reconnectTimer = window.setTimeout(() => {
         reconnectTimer = undefined
@@ -880,6 +972,9 @@ export function App() {
   const disconnect = () => {
     closed = true
     generation++
+    clearStatusTimer()
+    statusController?.abort()
+    statusController = undefined
     if (reconnectTimer !== undefined) {
       clearTimeout(reconnectTimer)
       reconnectTimer = undefined
@@ -910,6 +1005,7 @@ export function App() {
     // response overwrite a newer WebSocket snapshot.
     connect()
     void refresh()
+    scheduleStatus(STATUS_POLL_MS)
 
     const onScroll = () => {
       const current = share()
@@ -949,38 +1045,58 @@ export function App() {
     }
     const onPageShow = (event: PageTransitionEvent) => {
       if (!event.persisted) return
-      if (status() === "revoked") {
-        void refresh(true)
-        return
-      }
+      if (status() === "revoked") return
       closed = false
       setStatus("reconnecting")
       socket?.close()
       connect()
-      void refresh(true)
+      statusDelay = STATUS_RETRY_MS
+      void checkStatus()
     }
 
-    const tick = window.setInterval(() => setClock(Date.now()), 5000)
-    const poll = window.setInterval(() => {
-      if (closed || document.visibilityState !== "visible") return
-      const current = share()
-      if (!current) return
-      if (status() === "reconnecting" || Date.now() - current.updatedAt > 20_000) {
-        void refresh(true)
+    const onVisibility = () => {
+      if (document.visibilityState !== "visible") {
+        clearStatusTimer()
+        return
       }
-    }, 15_000)
+      if (closed || status() === "revoked") return
+
+      if (
+        !socket ||
+        socket.readyState === WebSocket.CLOSED ||
+        socket.readyState === WebSocket.CLOSING
+      ) {
+        setStatus("reconnecting")
+        connect()
+      }
+      statusDelay = status() === "reconnecting" ? STATUS_RETRY_MS : STATUS_POLL_MS
+      void checkStatus()
+    }
+
+    const tick = window.setInterval(() => {
+      const now = Date.now()
+      setClock(now)
+      if (
+        socket?.readyState === WebSocket.OPEN &&
+        lastFrameAt > 0 &&
+        now - lastFrameAt > WS_WATCHDOG_MS
+      ) {
+        socket.close()
+      }
+    }, 5000)
 
     window.addEventListener("scroll", onScroll, { passive: true })
     document.addEventListener("click", onCopy)
     window.addEventListener("pageshow", onPageShow)
+    document.addEventListener("visibilitychange", onVisibility)
     onCleanup(() => {
       disconnect()
       window.clearInterval(tick)
-      window.clearInterval(poll)
       if (activeFrame !== undefined) window.cancelAnimationFrame(activeFrame)
       window.removeEventListener("scroll", onScroll)
       document.removeEventListener("click", onCopy)
       window.removeEventListener("pageshow", onPageShow)
+      document.removeEventListener("visibilitychange", onVisibility)
     })
   })
 
@@ -1303,7 +1419,7 @@ export function App() {
               </div>
             </Show>
             <For each={displayTurns()}>
-              {(turn) => {
+              {(turn, turnIndex) => {
                 if (turn.kind === "assistant") {
                   return (
                     <div class="timeline-item" data-role="assistant">
@@ -1318,6 +1434,10 @@ export function App() {
                           messages={turn.messages}
                           shareId={current().id}
                           lastTextId={lastTextId()}
+                          running={
+                            current().session.running === true &&
+                            turnIndex() === displayTurns().length - 1
+                          }
                         />
                       </div>
                     </div>
@@ -1347,6 +1467,15 @@ export function App() {
                 )
               }}
             </For>
+            <Show
+              when={
+                current().session.running === true &&
+                displayTurns().at(-1)?.kind !== "assistant" &&
+                !current().page.hasAfter
+              }
+            >
+              <AssistantWorking label="Waiting for the assistant…" />
+            </Show>
             <Show when={current().page.hasAfter}>
               <div class="load-edge load-after">
                 <button
@@ -1538,9 +1667,14 @@ export function App() {
         <button
           type="button"
           class="new-messages no-print"
+          disabled={loadingTail()}
+          aria-busy={loadingTail()}
           onClick={() => void loadTail()}
         >
-          New messages
+          <Show when={loadingTail()} fallback="New messages">
+            <span class="spinner" aria-hidden="true" />
+            Loading…
+          </Show>
         </button>
       </Show>
 
@@ -1690,10 +1824,20 @@ function CompactionNotice(props: { text: string; shareId: string; time: number }
   )
 }
 
-function AssistantTurn(props: { messages: AssistantEntry[]; shareId: string; lastTextId: string }) {
+function AssistantTurn(props: {
+  messages: AssistantEntry[]
+  shareId: string
+  lastTextId: string
+  running?: boolean
+}) {
   const blocks = createMemo(() => buildAssistantBlocks(props.messages))
   const meta = createMemo(() => turnMeta(props.messages))
   const hasText = () => blocks().some((block) => block.kind === "text")
+  const toolCount = () =>
+    blocks().reduce(
+      (count, block) => count + (block.kind === "activity" ? block.tools : 0),
+      0,
+    )
   const hasTokens = () => {
     const tokens = meta().tokens
     return tokens.input + tokens.output + tokens.reasoning > 0
@@ -1702,7 +1846,7 @@ function AssistantTurn(props: { messages: AssistantEntry[]; shareId: string; las
   return (
     <div class="assistant-turn">
       <For each={blocks()}>
-        {(block) =>
+        {(block, blockIndex) =>
           block.kind === "text" ? (
             <TextPart
               id={block.id}
@@ -1711,7 +1855,11 @@ function AssistantTurn(props: { messages: AssistantEntry[]; shareId: string; las
               shareId={props.shareId}
             />
           ) : (
-            <ActivityGroup block={block} shareId={props.shareId} />
+            <ActivityGroup
+              block={block}
+              shareId={props.shareId}
+              running={props.running === true && blockIndex() === blocks().length - 1}
+            />
           )
         }
       </For>
@@ -1732,9 +1880,19 @@ function AssistantTurn(props: { messages: AssistantEntry[]; shareId: string; las
           <Show when={hasTokens()}>
             <span>{formatNumber(meta().tokens.input + meta().tokens.output)} tokens</span>
           </Show>
-          <Show when={meta().completed !== undefined}>
+          <Show when={meta().completed !== undefined && !props.running}>
             <span>{formatDate(meta().completed!)}</span>
           </Show>
+        </div>
+      </Show>
+
+      <Show when={props.running}>
+        <AssistantWorking label="Still working…" />
+      </Show>
+
+      <Show when={!props.running && !hasText() && toolCount() > 0}>
+        <div class="activity-note">
+          Tool-only response · {toolCount()} tool call{toolCount() === 1 ? "" : "s"}
         </div>
       </Show>
     </div>
@@ -1744,6 +1902,7 @@ function AssistantTurn(props: { messages: AssistantEntry[]; shareId: string; las
 function ActivityGroup(props: {
   block: Extract<AssistantBlock, { kind: "activity" }>
   shareId: string
+  running?: boolean
 }) {
   const disclosure = useDisclosure(`activity:${props.shareId}:${props.block.key}`)
   const label = () => {
@@ -1773,6 +1932,16 @@ function ActivityGroup(props: {
           <Show when={props.block.durationMs > 0}>
             <span class="activity-duration">{formatDuration(props.block.durationMs)}</span>
           </Show>
+          <Show when={props.running}>
+            <span class="activity-running" role="status">
+              <span class="typing-dots" aria-hidden="true">
+                <i />
+                <i />
+                <i />
+              </span>
+              Working
+            </span>
+          </Show>
         </span>
         <span class="activity-toggle">
           <span class="activity-closed">Show details</span>
@@ -1800,8 +1969,31 @@ function ActivityGroup(props: {
             )
           }
         </For>
+        <Show when={props.running}>
+          <div class="activity-loading" role="status">
+            <span class="typing-dots" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+            </span>
+            Waiting for more thinking and tool output…
+          </div>
+        </Show>
       </div>
     </details>
+  )
+}
+
+function AssistantWorking(props: { label: string }) {
+  return (
+    <div class="assistant-working" role="status" aria-live="polite">
+      <span class="typing-dots" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </span>
+      <span>{props.label}</span>
+    </div>
   )
 }
 
@@ -1879,6 +2071,16 @@ function usePartDetail(props: { shareId: string; messageIndex: number; partIndex
   return { detail, loading, failed, load }
 }
 
+function DetailSkeleton(props: { label: string }) {
+  return (
+    <div class="detail-skeleton" role="status" aria-live="polite">
+      <span class="detail-skeleton-label">{props.label}</span>
+      <span class="skeleton-line" />
+      <span class="skeleton-line short" />
+    </div>
+  )
+}
+
 function ReasoningPart(props: {
   text: string
   durationMs?: number
@@ -1927,7 +2129,7 @@ function ReasoningPart(props: {
       </summary>
       <div class="thinking-body prose-share" innerHTML={renderMarkdown(text())} />
       <Show when={detail.loading()}>
-        <div class="detail-loading">Loading details…</div>
+        <DetailSkeleton label="Loading thinking…" />
       </Show>
       <Show when={detail.failed() && !text()}>
         <div class="detail-loading">
@@ -2019,7 +2221,7 @@ function ToolCard(props: {
       </summary>
       <div class="tool-body space-y-3">
         <Show when={detail.loading()}>
-          <div class="detail-loading">Loading details…</div>
+          <DetailSkeleton label="Loading tool output…" />
         </Show>
         <Show when={detail.failed()}>
           <div class="detail-loading">

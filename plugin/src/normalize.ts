@@ -89,6 +89,7 @@ export function normalizeSession(
   location: { directory: string },
   info: any,
   messages: readonly any[],
+  running?: boolean,
 ): ShareSnapshot {
   const root = location.directory
   const truncated = { value: false }
@@ -201,6 +202,7 @@ export function normalizeSession(
       id: info.id,
       agent: info.agent,
       model: info.model,
+      ...(running !== undefined ? { running } : {}),
     },
     privacy: {
       dropped: [...dropped],

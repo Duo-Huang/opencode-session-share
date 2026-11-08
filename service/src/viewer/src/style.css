@@ -820,6 +820,145 @@ body {
   font-size: 11px;
 }
 
+.activity-running {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  color: var(--ink-muted);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+}
+
+.activity-loading,
+.assistant-working {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--ink-muted);
+  font-size: 11.5px;
+}
+
+.activity-loading {
+  margin: 0.35rem 0 0.15rem;
+  padding-left: 0.25rem;
+}
+
+.assistant-working {
+  margin: 0.7rem 0 0.2rem;
+  padding-left: 0.1rem;
+}
+
+.assistant-working.standalone {
+  margin: 1rem 0 0;
+  padding-left: 0;
+}
+
+.activity-note {
+  margin: 0.35rem 0 0;
+  padding-left: 0.1rem;
+  color: var(--ink-muted);
+  font-size: 11px;
+}
+
+.typing-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+.typing-dots i {
+  display: block;
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: currentColor;
+  animation: typing-dot 1.2s infinite ease-in-out;
+}
+
+.typing-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.typing-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+.detail-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.35rem 0;
+}
+
+.detail-skeleton-label {
+  color: var(--ink-muted);
+  font-size: 10.5px;
+}
+
+.skeleton-line {
+  display: block;
+  width: 100%;
+  height: 7px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    var(--page-soft) 0%,
+    var(--line) 45%,
+    var(--page-soft) 90%
+  );
+  background-size: 220% 100%;
+  animation: skeleton-flow 1.4s linear infinite;
+}
+
+.skeleton-line.short {
+  width: 58%;
+}
+
+.spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  flex: none;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--ink);
+  border-radius: 999px;
+  animation: spinner-turn 0.8s linear infinite;
+}
+
+.new-messages:disabled {
+  cursor: wait;
+  opacity: 0.82;
+}
+
+@keyframes typing-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.28;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+@keyframes skeleton-flow {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+@keyframes spinner-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .compaction {
   margin: 0.25rem 0 1rem;
 }

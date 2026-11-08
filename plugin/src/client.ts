@@ -31,7 +31,7 @@ export type ShareKeyPair = {
 }
 
 /** Keep this in sync with the service's SHARE_API_VERSION. */
-export const SHARE_API_VERSION = "2"
+export const SHARE_API_VERSION = "3"
 const REQUEST_TIMEOUT_MS = 120_000
 const USER_AGENT = "opencode-session-share-plugin"
 

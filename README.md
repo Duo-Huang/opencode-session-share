@@ -21,6 +21,7 @@ Share an OpenCode v2 session through a self-hosted, read-only web page.
 - Complete directory index and user/assistant search.
 - Message-based pagination that never splits a message.
 - 1-day fixed TTL; content syncs never extend it.
+- Live activity indicator while an agent turn is still running.
 - Optional Cloudflare edge cache; the service also works without Cloudflare.
 
 ## Quick start
@@ -149,14 +150,13 @@ Then run `/reload`, or restart the OpenCode service if needed.
 `opencode plugin update` updates the installed package but does not modify
 `options` in `opencode.jsonc`. Endpoint, keyId, and key stay as configured.
 
-v0.2.0 changes sync authentication to per-share Ed25519 signatures and requires
-service API version 2. Upgrade the service and plugin together; old links must
-be shared again.
+v0.3.0 adds live agent activity metadata and requires service API version 3.
+Upgrade the service and plugin together.
 
 If you pin an exact version:
 
 ```jsonc
-"package": "opencode-session-share-plugin@0.2.0"
+"package": "opencode-session-share-plugin@0.3.0"
 ```
 
 `opencode plugin update` skips it. Change the version manually to upgrade.
@@ -188,7 +188,7 @@ terminal control characters, but it is not a full secret scanner.
 ## Compatibility
 
 - OpenCode v2 only.
-- Service API version `2`.
+- Service API version `3`.
 - TUI commands only; Desktop/Web GUI commands are not implemented yet.
 
 ## Contributing
