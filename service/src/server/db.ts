@@ -24,6 +24,7 @@ db.exec(`
     payload_encoding TEXT,
     payload_hash     TEXT,
     sync_secret_hash TEXT,
+    sync_public_key  TEXT,
     size_bytes       INTEGER NOT NULL DEFAULT 0,
     stored_bytes     INTEGER NOT NULL DEFAULT 0,
     version          INTEGER NOT NULL DEFAULT 1,
@@ -53,6 +54,11 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS purge_queue_next ON purge_queue(next_at);
 `)
 
+const shareColumns = db.query("PRAGMA table_info(shares)").all() as { name: string }[]
+if (!shareColumns.some((column) => column.name === "sync_public_key")) {
+  db.exec("ALTER TABLE shares ADD COLUMN sync_public_key TEXT")
+}
+
 export type ShareRow = {
   id: string
   session_key: string | null
@@ -62,6 +68,7 @@ export type ShareRow = {
   payload_encoding: string | null
   payload_hash: string | null
   sync_secret_hash: string | null
+  sync_public_key: string | null
   size_bytes: number
   stored_bytes: number
   version: number
@@ -78,10 +85,6 @@ export function sessionKey(sessionID: string) {
 
 export function randomShareId() {
   return randomBytes(16).toString("base64url")
-}
-
-export function randomSyncSecret() {
-  return randomBytes(24).toString("base64url")
 }
 
 export function findById(id: string) {
@@ -113,6 +116,7 @@ export function expireShare(id: string, now = Date.now()) {
             title = NULL,
             session_key = NULL,
             sync_secret_hash = NULL,
+            sync_public_key = NULL,
             size_bytes = 0,
             stored_bytes = 0,
             revoked_at = ?,

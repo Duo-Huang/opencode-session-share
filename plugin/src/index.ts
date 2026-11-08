@@ -4,6 +4,7 @@ import { SessionShareRpc } from "./rpc"
 import {
   createShare,
   endpoint,
+  generateShareKeyPair,
   prepareShare,
   revokeBySession,
   syncShare,
@@ -14,38 +15,58 @@ import { normalizeSession } from "./normalize"
 import { parseShareKey, shareKey, SHARE_PREFIX } from "./storage"
 
 type StoredShare = ShareMeta & {
-  secret: string
+  privateKey: string
   directory: string
   /** Base URL of the service that owns this share. */
   endpoint?: string
 }
 
-type Watcher = {
+type ShareState = StoredShare & {
   sessionID: string
-  directory: string
-  shareID: string
-  secret: string
+  storageKey: string
   timer?: ReturnType<typeof setTimeout>
   dirty: boolean
   running: boolean
+  lastEventAt?: number
+}
+
+type StoredShareItem = {
+  key: string
+  sessionID: string
+  directory: string
+  stored: StoredShare
 }
 
 const SHARE_CONSENT_KEY = "share_consent_v2"
+
+// Content is uploaded at part boundaries, not for every delta. The final
+// snapshot is also flushed on session.idle.
+const RELEVANT_EVENTS = new Set<string>([
+  "session.idle",
+  "session.deleted",
+  "session.renamed",
+  "session.metadata.updated",
+  "session.model.selected",
+  "session.agent.selected",
+  "session.inbox.delivered",
+  "session.synthetic",
+  "session.text.ended",
+  "session.reasoning.ended",
+  "session.tool.success",
+  "session.tool.failed",
+  "session.shell.ended",
+  "session.step.ended",
+  "session.step.failed",
+  "session.compaction.ended",
+  "session.revert.committed",
+])
 
 export default Plugin.define({
   id: "opencode-session-share",
   async setup(ctx) {
     const pluginOptions = ctx.options as PluginOptions
-    const watchers = new Map<string, Watcher>()
+    const shares = new Map<string, ShareState>()
     const controller = new AbortController()
-    let heartbeat: ReturnType<typeof setInterval> | undefined
-
-    type StoredShareItem = {
-      key: string
-      sessionID: string
-      directory: string
-      stored: StoredShare
-    }
 
     const configuredEndpoint = () => {
       try {
@@ -67,36 +88,81 @@ export default Plugin.define({
       }
     }
 
+    const toStored = (state: ShareState): StoredShare => ({
+      id: state.id,
+      url: state.url,
+      expiresAt: state.expiresAt,
+      ...(state.updatedAt !== undefined ? { updatedAt: state.updatedAt } : {}),
+      privateKey: state.privateKey,
+      directory: state.directory,
+      ...(state.endpoint ? { endpoint: state.endpoint } : {}),
+    })
+
     const scanStoredShares = async () => {
-      const shares: StoredShareItem[] = []
+      const items: StoredShareItem[] = []
+      const legacyKeys: string[] = []
       let after: string | undefined
 
-      // A share can be created from any directory (including the user's home)
-      // and the TUI may restart in a different project directory. Scan all
-      // share keys instead of only ctx.location.directory.
+      // A share can be created from any directory, and the TUI may restart in
+      // a different project directory. Scan all share keys.
       for (let pageNumber = 0; pageNumber < 100; pageNumber++) {
         const page = await ctx.storage.scan({ prefix: SHARE_PREFIX, limit: 200, after })
         for (const entry of page.entries) {
           const parsed = parseShareKey(entry.key)
           if (!parsed) continue
-          const stored = entry.value as StoredShare | undefined
-          if (!stored?.id || !stored.secret || !stored.url) continue
-          shares.push({
+          const stored = entry.value as
+            | (Partial<StoredShare> & { secret?: string })
+            | undefined
+          if (stored && !stored.privateKey) {
+            // v1 metadata used a shared secret and cannot participate in the
+            // signed protocol. Drop it; old remote shares expire on their own.
+            if (stored.secret) legacyKeys.push(entry.key)
+            continue
+          }
+          if (
+            !stored?.id ||
+            !stored.privateKey ||
+            !stored.url ||
+            typeof stored.expiresAt !== "number"
+          ) {
+            continue
+          }
+          items.push({
             key: entry.key,
             sessionID: parsed.sessionID,
             directory: stored.directory ?? parsed.directory,
-            stored,
+            stored: stored as StoredShare,
           })
         }
         if (!page.next || page.next === after) break
         after = page.next
       }
-      return shares
+
+      for (const key of legacyKeys) {
+        try {
+          await ctx.storage.remove(key)
+        } catch {
+          // Best effort. A stale v1 key is ignored by the signed client.
+        }
+      }
+
+      return items
     }
 
-    const findStoredShare = async (sessionID: string) => {
+    const findStoredShare = async (
+      sessionID: string,
+    ): Promise<StoredShareItem | undefined> => {
       const current = configuredEndpoint()
       if (!current) return undefined
+      const state = shares.get(sessionID)
+      if (state) {
+        return {
+          key: state.storageKey,
+          sessionID,
+          directory: state.directory,
+          stored: toStored(state),
+        }
+      }
       return (await scanStoredShares()).find(
         (item) =>
           item.sessionID === sessionID &&
@@ -104,108 +170,135 @@ export default Plugin.define({
       )
     }
 
-    const readSnapshot = async (sessionID: string) => {
+    // Use the session's own project directory when creating a share, not the
+    // directory of whichever plugin instance happens to be handling it.
+    const readSnapshot = async (sessionID: string, fallbackDirectory: string) => {
       const info = await ctx.session.get({ sessionID })
+      const sessionDirectory =
+        (info as { location?: { directory?: string } }).location?.directory ??
+        fallbackDirectory
       const messages = (await ctx.session.context({ sessionID })) as readonly any[]
-      return normalizeSession(ctx.app, ctx.location, info, messages)
+      return {
+        snapshot: normalizeSession(
+          ctx.app,
+          { directory: sessionDirectory },
+          info,
+          messages,
+        ),
+        sessionDirectory,
+      }
     }
 
-    const stopWatcher = (sessionID: string) => {
-      const watcher = watchers.get(sessionID)
-      if (!watcher) return
-      if (watcher.timer) clearTimeout(watcher.timer)
-      watchers.delete(sessionID)
+    const stopState = (sessionID: string) => {
+      const state = shares.get(sessionID)
+      if (!state) return
+      if (state.timer) clearTimeout(state.timer)
+      shares.delete(sessionID)
     }
 
-    const forgetShare = async (sessionID: string, directory: string) => {
-      stopWatcher(sessionID)
-      const stored = await findStoredShare(sessionID)
-      await ctx.storage.remove(stored?.key ?? shareKey(directory, sessionID))
+    const forgetShare = async (sessionID: string, directory?: string) => {
+      const state = shares.get(sessionID)
+      const key =
+        state?.storageKey ?? shareKey(directory ?? ctx.location.directory, sessionID)
+      stopState(sessionID)
+      try {
+        await ctx.storage.remove(key)
+      } catch (error) {
+        console.warn("session-share: failed to remove local share key", error)
+      }
     }
 
     const flush = async (sessionID: string) => {
-      const watcher = watchers.get(sessionID)
-      if (!watcher) return
-      if (watcher.running) {
-        watcher.dirty = true
+      const state = shares.get(sessionID)
+      if (!state) return
+      if (state.running) {
+        state.dirty = true
         return
       }
-      if (watcher.timer) {
-        clearTimeout(watcher.timer)
-        watcher.timer = undefined
+      if (state.timer) {
+        clearTimeout(state.timer)
+        state.timer = undefined
       }
-      watcher.running = true
-      watcher.dirty = false
+      state.running = true
+      state.dirty = false
       try {
-        const snapshot = await readSnapshot(sessionID)
-        await syncShare(watcher.shareID, watcher.secret, snapshot, pluginOptions)
+        const { snapshot } = await readSnapshot(sessionID, state.directory)
+        await syncShare(state.id, state.privateKey, snapshot, pluginOptions)
       } catch (error) {
         const status = (error as Error & { status?: number }).status
-        if (status === 410 || status === 404) {
-          await forgetShare(sessionID, watcher.directory)
+        if (
+          status === 401 ||
+          status === 403 ||
+          status === 404 ||
+          status === 409 ||
+          status === 410
+        ) {
+          await forgetShare(sessionID, state.directory)
           return
         }
         console.warn("session-share sync failed", {
           sessionID,
           error: error instanceof Error ? error.message : String(error),
         })
-        const current = watchers.get(sessionID)
+        const current = shares.get(sessionID)
         if (current) {
           current.timer = setTimeout(() => void flush(sessionID), 3000)
           current.timer.unref?.()
         }
       } finally {
-        watcher.running = false
-        if (watcher.dirty) {
-          watcher.dirty = false
+        state.running = false
+        if (state.dirty) {
+          state.dirty = false
           void flush(sessionID)
         }
       }
     }
 
     const schedule = (sessionID: string, immediate = false) => {
-      const watcher = watchers.get(sessionID)
-      if (!watcher) return
+      const state = shares.get(sessionID)
+      if (!state) return
       if (immediate) {
         void flush(sessionID)
         return
       }
-      if (watcher.timer) return
-      watcher.timer = setTimeout(() => void flush(sessionID), 1000)
-      watcher.timer.unref?.()
+      if (state.timer) return
+      state.timer = setTimeout(() => void flush(sessionID), 1000)
+      state.timer.unref?.()
     }
 
-    const startWatcher = (sessionID: string, stored: StoredShare, immediate = false) => {
-      stopWatcher(sessionID)
-      watchers.set(sessionID, {
-        sessionID,
-        directory: stored.directory,
-        shareID: stored.id,
-        secret: stored.secret,
-        dirty: false,
-        running: false,
-      })
-      if (immediate) schedule(sessionID, true)
-    }
-
-    const rememberShare = async (sessionID: string, share: StoredShare, immediate = false) => {
+    const rememberShare = async (sessionID: string, share: StoredShare) => {
       const current = configuredEndpoint()
       const { endpoint: existing, ...rest } = share
       const stored: StoredShare = {
         ...rest,
         ...(existing || current ? { endpoint: existing ?? current } : {}),
       }
-      await ctx.storage.set(shareKey(stored.directory, sessionID), stored)
-      startWatcher(sessionID, stored, immediate)
+      const storageKey = shareKey(stored.directory, sessionID)
+      await ctx.storage.set(storageKey, stored)
+      const previous = shares.get(sessionID)
+      if (previous?.timer) clearTimeout(previous.timer)
+      shares.set(sessionID, {
+        ...stored,
+        sessionID,
+        storageKey,
+        dirty: false,
+        running: false,
+        lastEventAt: previous?.lastEventAt,
+      })
     }
 
     const unshare = async (sessionID: string) => {
-      const watcher = watchers.get(sessionID)
-      const stored = await findStoredShare(sessionID)
-      const key =
-        stored?.key ??
-        shareKey(watcher?.directory ?? ctx.location.directory, sessionID)
-      stopWatcher(sessionID)
+      const state = shares.get(sessionID)
+      const found = state
+        ? {
+            key: state.storageKey,
+            directory: state.directory,
+            stored: toStored(state),
+          }
+        : await findStoredShare(sessionID)
+      const directory = state?.directory ?? found?.directory ?? ctx.location.directory
+      const key = state?.storageKey ?? found?.key ?? shareKey(directory, sessionID)
+      stopState(sessionID)
 
       try {
         const result = await revokeBySession(sessionID, pluginOptions)
@@ -224,13 +317,16 @@ export default Plugin.define({
           return { revoked: false }
         }
 
-        // Keep the share alive locally so the user can retry /unshare.
-        if (stored && stored.stored.expiresAt > Date.now()) {
-          startWatcher(
+        // Keep the share metadata locally so the user can retry /unshare.
+        if (found && found.stored.expiresAt > Date.now()) {
+          shares.set(sessionID, {
+            ...found.stored,
+            directory,
             sessionID,
-            { ...stored.stored, directory: stored.directory },
-            false,
-          )
+            storageKey: key,
+            dirty: false,
+            running: false,
+          })
         }
         throw error
       }
@@ -241,16 +337,32 @@ export default Plugin.define({
         const { sessionID } = input as { sessionID: string }
         const found = await findStoredShare(sessionID)
         if (found && found.stored.expiresAt > Date.now()) {
-          if (!watchers.has(sessionID)) {
-            startWatcher(sessionID, { ...found.stored, directory: found.directory }, false)
+          if (!shares.has(sessionID)) {
+            shares.set(sessionID, {
+              ...found.stored,
+              directory: found.directory,
+              sessionID,
+              storageKey: found.key,
+              dirty: false,
+              running: false,
+            })
           }
           // Existing share: answer from local storage immediately; verify in the
           // background so a remote /unshare eventually clears the stale entry.
           void prepareShare(sessionID, pluginOptions)
             .then((existing) => {
               if (!existing) return forgetShare(sessionID, found.directory)
+              const state = shares.get(sessionID)
+              if (state && (state.url !== existing.url || state.expiresAt !== existing.expiresAt)) {
+                state.url = existing.url
+                state.expiresAt = existing.expiresAt
+                void ctx.storage.set(state.storageKey, toStored(state)).catch(() => {})
+              }
             })
             .catch(() => {})
+          // /share is an explicit user action: refresh the page with the current
+          // session snapshot once. This is not a periodic background sync.
+          schedule(sessionID, true)
           return {
             consentRequired: false,
             share: {
@@ -264,14 +376,18 @@ export default Plugin.define({
         const existing = await prepareShare(sessionID, pluginOptions)
         const consent = (await ctx.storage.get(SHARE_CONSENT_KEY)) === true
         if (existing && found) {
-          // The local sync secret is still available even though the stored
-          // expiry has passed; syncing will refresh it.
-          startWatcher(sessionID, { ...found.stored, directory: found.directory }, false)
+          // The local private key is still available. Refresh the fixed expiry
+          // from the server rather than creating a new share.
+          await rememberShare(sessionID, {
+            ...found.stored,
+            directory: found.directory,
+            url: existing.url,
+            expiresAt: existing.expiresAt,
+          })
           return { consentRequired: false, share: existing }
         }
-        // A remote share without its local sync secret cannot be updated. The
-        // next createShare call updates the same server-side share and returns
-        // a fresh secret, so ask for consent and let the caller recreate it.
+        // A remote share without a local private key cannot be updated. The
+        // next share call creates/updates it with a fresh Ed25519 keypair.
         return { consentRequired: !consent, share: null }
       },
       share: async (input) => {
@@ -279,37 +395,49 @@ export default Plugin.define({
         const existing = await prepareShare(sessionID, pluginOptions)
         const found = await findStoredShare(sessionID)
         if (existing && found) {
-          startWatcher(
-            sessionID,
-            { ...found.stored, directory: found.directory },
-            true,
-          )
-          return existing
+          await rememberShare(sessionID, {
+            ...found.stored,
+            directory: found.directory,
+            url: existing.url,
+            expiresAt: existing.expiresAt,
+          })
+          schedule(sessionID, true)
+          return {
+            id: existing.id,
+            url: existing.url,
+            expiresAt: existing.expiresAt,
+          }
         }
 
-        // If a remote share exists without its local sync secret, fall through:
-        // createShare updates the same server-side share and returns a fresh
-        // secret.
         const allowed = (await ctx.storage.get(SHARE_CONSENT_KEY)) === true || consent === true
         if (!allowed) throw new Error("Share consent required")
         if (consent === true) await ctx.storage.set(SHARE_CONSENT_KEY, true)
 
-        const snapshot = await readSnapshot(sessionID)
+        const { snapshot, sessionDirectory } = await readSnapshot(
+          sessionID,
+          ctx.location.directory,
+        )
         if (!snapshot.messages.length) {
           throw new Error("Session has no shareable messages yet")
         }
-        // Create quickly with a bounded snapshot; the watcher immediately
-        // syncs the full snapshot in the background.
-        const result = await createShare(compactForUpload(snapshot), pluginOptions)
+        const compacted = compactForUpload(snapshot)
+        const keyPair = generateShareKeyPair()
+        const result = await createShare(compacted, keyPair.publicKey, pluginOptions)
         const stored: StoredShare = {
           id: result.id,
           url: result.url,
-          secret: result.secret,
           expiresAt: result.expiresAt,
-          directory: ctx.location.directory,
+          privateKey: keyPair.privateKey,
+          directory: sessionDirectory,
           endpoint: configuredEndpoint() || undefined,
         }
-        await rememberShare(sessionID, stored, true)
+        await rememberShare(sessionID, stored)
+
+        // The initial upload is bounded for latency. If it was compacted, upload
+        // the full snapshot once now; this is a one-shot completion, not a
+        // periodic background sync.
+        if (compacted !== snapshot) schedule(sessionID, true)
+
         return { id: result.id, url: result.url, expiresAt: result.expiresAt }
       },
       unshare: async (input) => {
@@ -318,28 +446,36 @@ export default Plugin.define({
       },
     })
 
-    const resume = async () => {
+    const loadShares = async () => {
       const current = configuredEndpoint()
       if (!current) return
-      const shares = await scanStoredShares()
-      for (const item of shares) {
+      const items = await scanStoredShares()
+      for (const item of items) {
         if (!sameEndpoint(storedEndpoint(item.stored, current), current)) continue
-        startWatcher(
-          item.sessionID,
-          { ...item.stored, directory: item.directory },
-          true,
-        )
+        if (item.stored.expiresAt <= Date.now()) {
+          try {
+            await ctx.storage.remove(item.key)
+          } catch {}
+          continue
+        }
+        shares.set(item.sessionID, {
+          ...item.stored,
+          directory: item.directory,
+          sessionID: item.sessionID,
+          storageKey: item.key,
+          dirty: false,
+          running: false,
+        })
       }
     }
 
-    void resume().catch((error) => {
-      console.warn("session-share resume failed", error)
-    })
+    await loadShares()
 
     void (async () => {
       while (!controller.signal.aborted) {
         try {
           for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+            if (!RELEVANT_EVENTS.has(event.type)) continue
             const data = event.data as Record<string, unknown> | undefined
             const sessionID =
               (typeof data?.sessionID === "string" && data.sessionID) ||
@@ -349,10 +485,13 @@ export default Plugin.define({
             if (!sessionID) continue
 
             if (event.type === "session.deleted") {
-              if (watchers.has(sessionID)) void unshare(sessionID).catch(() => {})
+              if (shares.has(sessionID)) void unshare(sessionID).catch(() => {})
               continue
             }
-            if (!watchers.has(sessionID)) continue
+
+            const state = shares.get(sessionID)
+            if (!state) continue
+            state.lastEventAt = Date.now()
             schedule(sessionID, event.type === "session.idle")
           }
         } catch (error) {
@@ -360,20 +499,32 @@ export default Plugin.define({
         }
         if (controller.signal.aborted) break
         await new Promise((resolve) => setTimeout(resolve, 3000))
+
+        // One-time catch-up after reconnect, only for shares that were active
+        // shortly before the disconnect. Idle shares are never polled.
+        const cutoff = Date.now() - 10 * 60_000
+        for (const [sessionID, state] of shares) {
+          if (state.lastEventAt && state.lastEventAt >= cutoff) schedule(sessionID)
+        }
       }
     })()
 
-    // Event delivery is best-effort. A periodic flush guarantees that a lost
-    // stream cannot leave a share frozen indefinitely.
-    heartbeat = setInterval(() => {
-      for (const sessionID of watchers.keys()) schedule(sessionID)
+    // Intentionally no heartbeat. Sync is event-driven; an idle session never
+    // uploads. The reconnect path above performs a one-time catch-up for shares
+    // that were recently active. Revisit only if OpenCode's event stream proves
+    // lossy or half-open. This timer only removes expired local metadata.
+    const expiryTimer = setInterval(() => {
+      const current = Date.now()
+      for (const [sessionID, state] of shares) {
+        if (state.expiresAt <= current) void forgetShare(sessionID, state.directory)
+      }
     }, 60_000)
-    heartbeat.unref?.()
+    expiryTimer.unref?.()
 
     return async () => {
       controller.abort()
-      if (heartbeat) clearInterval(heartbeat)
-      for (const sessionID of [...watchers.keys()]) stopWatcher(sessionID)
+      clearInterval(expiryTimer)
+      for (const sessionID of [...shares.keys()]) stopState(sessionID)
       await registration.dispose()
     }
   },

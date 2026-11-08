@@ -17,6 +17,7 @@ const Env = z.object({
     }),
   SHARE_DEFAULT_TTL_DAYS: z.coerce.number().min(1).max(365).default(1),
   SHARE_MAX_TTL_DAYS: z.coerce.number().min(0).max(365).default(30),
+  SHARE_TOMBSTONE_DAYS: z.coerce.number().min(1).max(365).default(7),
   SHARE_MAX_BYTES: z.coerce.number().int().min(1024).max(100 * 1024 * 1024).default(15 * 1024 * 1024),
   SHARE_VIEW_MAX_BYTES: z.coerce
     .number()
@@ -43,6 +44,7 @@ export type Config = {
   publicBaseUrl: string
   defaultTtlMs: number
   maxTtlMs: number
+  tombstoneMs: number
   maxBytes: number
   viewMaxBytes: number
   dbMaxBytes: number
@@ -90,6 +92,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     publicBaseUrl: base,
     defaultTtlMs: defaultTtlDays * 86400_000,
     maxTtlMs: parsed.SHARE_MAX_TTL_DAYS * 86400_000,
+    tombstoneMs: parsed.SHARE_TOMBSTONE_DAYS * 86400_000,
     maxBytes: parsed.SHARE_MAX_BYTES,
     viewMaxBytes: parsed.SHARE_VIEW_MAX_BYTES,
     dbMaxBytes: parsed.SHARE_DB_MAX_MB * 1024 * 1024,

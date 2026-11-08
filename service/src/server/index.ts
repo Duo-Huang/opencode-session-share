@@ -4,10 +4,9 @@ import { compress } from "hono/compress"
 import { serveStatic } from "hono/bun"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
-import { createHash, randomBytes } from "node:crypto"
 import { gzipSync, gunzipSync } from "node:zlib"
 import { config } from "./config"
-import { authenticate, hashSecret, verifySecret } from "./auth"
+import { authenticate } from "./auth"
 import {
   checkpoint,
   db,
@@ -18,7 +17,6 @@ import {
   findAnyActiveBySessionKey,
   findById,
   randomShareId,
-  randomSyncSecret,
   sessionKey,
   vacuum,
   type ShareRow,
@@ -33,6 +31,14 @@ import {
   type ValidShareSnapshot,
 } from "./payload"
 import { rateLimit } from "./ratelimit"
+import {
+  SYNC_CLOCK_SKEW_MS,
+  SYNC_NONCE_TTL_MS,
+  parsePublicKey,
+  sha256Hex,
+  syncSignatureMessage,
+  verifySignature,
+} from "./signature"
 import { processPurgeQueue, purgeNow } from "./cloudflare"
 import {
   broadcastUpdate,
@@ -52,10 +58,11 @@ import {
 } from "./render"
 
 const app = new Hono()
-const SHARE_API_VERSION = "1"
+const SHARE_API_VERSION = "2"
 const viewerDir = join(import.meta.dir, "../../dist/viewer")
 const viewerIndex = join(viewerDir, "index.html")
 const revokedIds = new Map<string, number>()
+const usedNonces = new Map<string, number>()
 
 let viewerHtmlCache: string | undefined
 function readViewerHtml() {
@@ -77,12 +84,16 @@ async function readJsonBody(c: Context) {
   return c.req.json()
 }
 
-function now() {
-  return Date.now()
+async function readDecodedBody(c: Context) {
+  const raw = Buffer.from(await c.req.arrayBuffer())
+  if (raw.length >= 2 && raw[0] === 0x1f && raw[1] === 0x8b) {
+    return gunzipSync(raw)
+  }
+  return raw
 }
 
-function sha256(value: string) {
-  return createHash("sha256").update(value).digest("hex")
+function now() {
+  return Date.now()
 }
 
 function publicUrl(id: string) {
@@ -362,6 +373,14 @@ app.post("/api/shares", async (c) => {
     return c.json({ error: "invalid_json" }, 400, noStore())
   }
 
+  const publicKeyInput =
+    body && typeof body === "object" && "publicKey" in body
+      ? (body as { publicKey?: unknown }).publicKey
+      : undefined
+  if (typeof publicKeyInput !== "string" || !parsePublicKey(publicKeyInput)) {
+    return c.json({ error: "invalid_public_key" }, 400, noStore())
+  }
+
   const snapshotInput =
     body && typeof body === "object" && "snapshot" in body
       ? (body as { snapshot: unknown }).snapshot
@@ -388,7 +407,7 @@ app.post("/api/shares", async (c) => {
   const stored = stripSessionId(snapshot as ValidShareSnapshot)
   const storedRaw = JSON.stringify(stored)
   const compressed = gzipSync(Buffer.from(storedRaw), { level: 6 })
-  const payloadHash = sha256(storedRaw)
+  const payloadHash = sha256Hex(storedRaw)
   const key = sessionKey(snapshot.session.id)
   const current = now()
   const requestedTtl =
@@ -406,8 +425,6 @@ app.post("/api/shares", async (c) => {
 
   const existing = findActiveBySessionKey(key)
   const id = existing?.id ?? randomShareId()
-  const syncSecret = randomSyncSecret()
-  const secretHash = hashSecret(syncSecret)
   const version = (existing?.version ?? 0) + 1
   const compressedBytes = new Uint8Array(compressed)
 
@@ -416,16 +433,16 @@ app.post("/api/shares", async (c) => {
       db.run(
         `UPDATE shares
             SET key_id = ?, title = ?, payload = ?, payload_encoding = 'gzip',
-                payload_hash = ?, sync_secret_hash = ?, size_bytes = ?,
-                stored_bytes = ?, version = ?, updated_at = ?, last_sync_at = ?,
-                expires_at = ?
+                payload_hash = ?, sync_secret_hash = NULL, sync_public_key = ?,
+                size_bytes = ?, stored_bytes = ?, version = ?, updated_at = ?,
+                last_sync_at = ?, expires_at = ?
           WHERE id = ?`,
         [
           auth.keyId,
           stored.title,
           compressedBytes,
           payloadHash,
-          secretHash,
+          publicKeyInput,
           Buffer.byteLength(storedRaw),
           compressed.byteLength,
           version,
@@ -439,9 +456,9 @@ app.post("/api/shares", async (c) => {
       db.run(
         `INSERT INTO shares
           (id, session_key, key_id, title, payload, payload_encoding, payload_hash,
-           sync_secret_hash, size_bytes, stored_bytes, version, created_at,
-           updated_at, last_sync_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, 'gzip', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           sync_secret_hash, sync_public_key, size_bytes, stored_bytes, version,
+           created_at, updated_at, last_sync_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, 'gzip', ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           key,
@@ -449,7 +466,7 @@ app.post("/api/shares", async (c) => {
           stored.title,
           compressedBytes,
           payloadHash,
-          secretHash,
+          publicKeyInput,
           Buffer.byteLength(storedRaw),
           compressed.byteLength,
           version,
@@ -476,7 +493,6 @@ app.post("/api/shares", async (c) => {
     {
       id,
       url: publicUrl(id),
-      secret: syncSecret,
       updated: !!existing,
       version,
       expiresAt,
@@ -487,9 +503,6 @@ app.post("/api/shares", async (c) => {
 })
 
 app.post("/api/shares/:id/sync", async (c) => {
-  const auth = authenticate(c)
-  if (!auth) return c.json({ error: "unauthorized" }, 401, noStore())
-
   const id = c.req.param("id")
   if (!rateLimit(`sync:${id}`, 4, 1000)) {
     return c.json({ error: "rate_limited" }, 429, noStore())
@@ -501,13 +514,53 @@ app.post("/api/shares/:id/sync", async (c) => {
     await revokeShare(id)
     return c.json({ error: "expired" }, 410, noStore())
   }
-  if (!verifySecret(c.req.header("x-share-secret"), row.sync_secret_hash ?? "")) {
-    return c.json({ error: "forbidden" }, 403, noStore())
+  if (!row.sync_public_key) {
+    return c.json({ error: "share_requires_new_key" }, 409, noStore())
   }
+  const publicKey = parsePublicKey(row.sync_public_key)
+  if (!publicKey) {
+    return c.json({ error: "invalid_public_key" }, 500, noStore())
+  }
+
+  let decoded: Buffer
+  try {
+    decoded = await readDecodedBody(c)
+  } catch {
+    return c.json({ error: "invalid_body" }, 400, noStore())
+  }
+  if (decoded.length === 0) {
+    return c.json({ error: "invalid_body" }, 400, noStore())
+  }
+
+  const timestamp = c.req.header("x-share-timestamp") ?? ""
+  const nonce = c.req.header("x-share-nonce") ?? ""
+  const signature = c.req.header("x-share-signature")
+  const parsedTimestamp = Number(timestamp)
+  if (
+    !/^\d{13}$/.test(timestamp) ||
+    !Number.isFinite(parsedTimestamp) ||
+    Math.abs(Date.now() - parsedTimestamp) > SYNC_CLOCK_SKEW_MS
+  ) {
+    return c.json({ error: "invalid_timestamp" }, 401, noStore())
+  }
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(nonce)) {
+    return c.json({ error: "invalid_nonce" }, 401, noStore())
+  }
+  const nonceKey = `${id}:${nonce}`
+  if (usedNonces.has(nonceKey)) {
+    return c.json({ error: "replayed_nonce" }, 401, noStore())
+  }
+
+  const bodyHash = sha256Hex(decoded)
+  const message = syncSignatureMessage(c.req.path, timestamp, nonce, bodyHash)
+  if (!verifySignature(publicKey, signature, message)) {
+    return c.json({ error: "invalid_signature" }, 401, noStore())
+  }
+  usedNonces.set(nonceKey, Date.now() + SYNC_NONCE_TTL_MS)
 
   let body: unknown
   try {
-    body = await readJsonBody(c)
+    body = JSON.parse(decoded.toString("utf8"))
   } catch {
     return c.json({ error: "invalid_json" }, 400, noStore())
   }
@@ -525,19 +578,17 @@ app.post("/api/shares/:id/sync", async (c) => {
   }
   const stored = stripSessionId(parsed.data as ValidShareSnapshot)
   const storedRaw = JSON.stringify(stored)
-  const payloadHash = sha256(storedRaw)
+  const payloadHash = sha256Hex(storedRaw)
   if (payloadHash === row.payload_hash) {
     return c.json({ ok: true, changed: false }, 200, noStore())
   }
 
   const compressed = gzipSync(Buffer.from(storedRaw), { level: 6 })
   const current = now()
-  const expiresAt = current + ttlMs(undefined)
   db.run(
     `UPDATE shares
         SET payload = ?, payload_encoding = 'gzip', payload_hash = ?,
-            size_bytes = ?, stored_bytes = ?, updated_at = ?, last_sync_at = ?,
-            expires_at = ?
+            size_bytes = ?, stored_bytes = ?, updated_at = ?, last_sync_at = ?
       WHERE id = ? AND revoked_at IS NULL`,
     [
       new Uint8Array(compressed),
@@ -546,11 +597,10 @@ app.post("/api/shares/:id/sync", async (c) => {
       compressed.byteLength,
       current,
       current,
-      expiresAt,
       id,
     ],
   )
-  broadcastUpdate(id, livePayload(stored as ValidShareSnapshot, id, current, expiresAt))
+  broadcastUpdate(id, livePayload(stored as ValidShareSnapshot, id, current, row.expires_at))
   return c.json({ ok: true, changed: true }, 200, noStore())
 })
 
@@ -775,9 +825,12 @@ export function startServer() {
           console.log("share expired", row.id)
         }
         for (const [id, at] of revokedIds) {
-          if (at < current - 30 * 86400_000) revokedIds.delete(id)
+          if (at < current - config.tombstoneMs) revokedIds.delete(id)
         }
-        deleteOldTombstones(current - 30 * 86400_000)
+        for (const [key, at] of usedNonces) {
+          if (at < current) usedNonces.delete(key)
+        }
+        deleteOldTombstones(current - config.tombstoneMs)
         checkpoint()
       } finally {
         expiryRunning = false

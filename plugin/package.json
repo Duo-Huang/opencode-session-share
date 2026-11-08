@@ -1,6 +1,6 @@
 {
   "name": "opencode-session-share-plugin",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "Share an OpenCode session through a self-hosted read-only viewer",
   "type": "module",
   "license": "MIT",

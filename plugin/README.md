@@ -58,10 +58,12 @@ Then run `/reload`, or `opencode service restart` if the TUI did not pick it up.
 
 `opencode plugin update` updates the installed npm package but does **not** modify `options` in `opencode.jsonc`. Your endpoint, keyId, and key stay as configured.
 
+v0.2.0 requires service API version 2 and uses a per-share Ed25519 key for sync. Upgrade the service and plugin together, then share existing sessions again.
+
 If you pin an exact version:
 
 ```jsonc
-"package": "opencode-session-share-plugin@0.1.4"
+"package": "opencode-session-share-plugin@0.2.0"
 ```
 
 `opencode plugin update` skips it. Change the version manually to upgrade.
@@ -73,7 +75,7 @@ If you pin an exact version:
 /unshare
 ```
 
-- `/share` creates or reuses a public share link, asks for consent once, and copies the URL.
+- `/share` creates or reuses a public share link, asks for consent once, and copies the URL. The link expires one day after creation; later messages do not extend it.
 - `/unshare` revokes the public link and clears the local record.
 - Consent is global per OpenCode installation; later sessions do not prompt again. `/unshare` does not reset it. Upgrading from an older consent version prompts once again for the updated public-link warning.
 - If clipboard access fails, the toast includes the URL.

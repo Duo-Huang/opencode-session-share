@@ -1,3 +1,10 @@
+import {
+  createHash,
+  createPrivateKey,
+  generateKeyPairSync,
+  randomBytes,
+  sign,
+} from "node:crypto"
 import { gzipSync } from "node:zlib"
 import type { ShareSnapshot } from "./types"
 
@@ -15,12 +22,16 @@ export type ShareMeta = {
 }
 
 export type CreateResult = ShareMeta & {
-  secret: string
   updated: boolean
 }
 
+export type ShareKeyPair = {
+  publicKey: string
+  privateKey: string
+}
+
 /** Keep this in sync with the service's SHARE_API_VERSION. */
-export const SHARE_API_VERSION = "1"
+export const SHARE_API_VERSION = "2"
 const REQUEST_TIMEOUT_MS = 120_000
 const USER_AGENT = "opencode-session-share-plugin"
 
@@ -54,13 +65,30 @@ export function credentials(options: PluginOptions = {}) {
   return { keyId, key }
 }
 
+export function generateShareKeyPair(): ShareKeyPair {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519")
+  return {
+    publicKey: publicKey.export({ format: "der", type: "spki" }).toString("base64url"),
+    privateKey: privateKey.export({ format: "der", type: "pkcs8" }).toString("base64url"),
+  }
+}
+
+function sha256Hex(value: string | Uint8Array) {
+  return createHash("sha256").update(value).digest("hex")
+}
+
 function gzipJson(value: unknown) {
   return gzipSync(Buffer.from(JSON.stringify(value)))
 }
 
-async function request(path: string, init: RequestInit = {}, options: PluginOptions = {}) {
+async function request(
+  path: string,
+  init: RequestInit = {},
+  options: PluginOptions = {},
+  authenticated = true,
+) {
   const { keyId, key } = credentials(options)
-  if (!key) {
+  if (authenticated && !key) {
     throw new Error(
       "session-share: missing key. Set the plugin key option or OPENCODE_SHARE_KEY.",
     )
@@ -70,10 +98,14 @@ async function request(path: string, init: RequestInit = {}, options: PluginOpti
     ...init,
     redirect: "error",
     headers: {
-      authorization: `Bearer ${key}`,
-      ...(keyId ? { "x-share-key-id": keyId } : {}),
       "content-type": "application/json",
       "user-agent": USER_AGENT,
+      ...(authenticated
+        ? {
+            authorization: `Bearer ${key}`,
+            ...(keyId ? { "x-share-key-id": keyId } : {}),
+          }
+        : {}),
       ...(init.headers ?? {}),
     },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -110,6 +142,7 @@ export async function prepareShare(
 
 export async function createShare(
   snapshot: ShareSnapshot,
+  publicKey: string,
   options: PluginOptions = {},
 ): Promise<CreateResult> {
   const response = await request(
@@ -117,7 +150,7 @@ export async function createShare(
     {
       method: "POST",
       headers: { "content-encoding": "gzip" },
-      body: gzipJson({ snapshot }),
+      body: gzipJson({ snapshot, publicKey }),
     },
     options,
   )
@@ -126,18 +159,38 @@ export async function createShare(
 
 export async function syncShare(
   id: string,
-  secret: string,
+  privateKey: string,
   snapshot: ShareSnapshot,
   options: PluginOptions = {},
 ) {
+  const path = `/api/shares/${encodeURIComponent(id)}/sync`
+  const json = JSON.stringify({ snapshot })
+  const body = gzipSync(Buffer.from(json))
+  const timestamp = String(Date.now())
+  const nonce = randomBytes(16).toString("base64url")
+  const bodyHash = sha256Hex(json)
+  const message = `POST\n${path}\n${timestamp}\n${nonce}\n${bodyHash}`
+  const key = createPrivateKey({
+    key: Buffer.from(privateKey, "base64url"),
+    format: "der",
+    type: "pkcs8",
+  })
+  const signature = sign(null, Buffer.from(message), key).toString("base64url")
+
   const response = await request(
-    `/api/shares/${encodeURIComponent(id)}/sync`,
+    path,
     {
       method: "POST",
-      headers: { "x-share-secret": secret, "content-encoding": "gzip" },
-      body: gzipJson({ snapshot }),
+      headers: {
+        "content-encoding": "gzip",
+        "x-share-timestamp": timestamp,
+        "x-share-nonce": nonce,
+        "x-share-signature": signature,
+      },
+      body,
     },
     options,
+    false,
   )
   return (await response.json()) as { ok: boolean; changed: boolean }
 }

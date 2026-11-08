@@ -30,14 +30,3 @@ export function authenticate(c: Context): AuthResult | null {
 
   return { keyId: key.id }
 }
-
-export function hashSecret(secret: string) {
-  return sha256(secret).toString("hex")
-}
-
-export function verifySecret(secret: string | undefined, hash: string) {
-  if (!secret) return false
-  const got = sha256(secret)
-  const expected = Buffer.from(hash, "hex")
-  return got.length === expected.length && timingSafeEqual(got, expected)
-}

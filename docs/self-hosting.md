@@ -45,7 +45,7 @@ Or use the published image:
 docker compose -f compose.ghcr.yml up -d
 ```
 
-Set `SHARE_VERSION=v0.1.5` in `.env` to pin the image.
+Set `SHARE_VERSION=v0.2.0` in `.env` to pin the image.
 
 Check:
 
@@ -60,8 +60,9 @@ curl http://localhost:47821/healthz
 | `SHARE_KEYS` | required | Comma-separated `device-id:secret` entries. Use one entry per device. |
 | `SHARE_SESSION_SALT` | required | Stable HMAC salt for session lookup. Do not rotate casually. |
 | `SHARE_PUBLIC_BASE_URL` | required | Public URL returned in share links. |
-| `SHARE_DEFAULT_TTL_DAYS` | `1` | Default share lifetime. |
+| `SHARE_DEFAULT_TTL_DAYS` | `1` | Fixed share lifetime from creation. |
 | `SHARE_MAX_TTL_DAYS` | `30` | Maximum accepted share lifetime. |
+| `SHARE_TOMBSTONE_DAYS` | `7` | Revoked share metadata retention. |
 | `SHARE_MAX_BYTES` | `15728640` | Maximum stored snapshot size. |
 | `SHARE_VIEW_MAX_BYTES` | `131072` | First-page payload target. |
 | `SHARE_DB_MAX_MB` | `1024` | SQLite size limit. |
@@ -127,15 +128,18 @@ The SQLite database is stored in the `opencode-session-share-data` volume
 
 - Keep the volume across container recreation.
 - Back up the volume if you need to preserve shares.
-- Default TTL is 1 day.
+- Default TTL is 1 day from creation. Live syncs never extend it.
 - `/unshare` clears the server-side payload, closes live connections, and
   purges the edge cache when configured.
 - Expiry uses the same cleanup path as `/unshare`.
+- Revoked metadata is deleted after `SHARE_TOMBSTONE_DAYS` (default 7).
 
 ## Security
 
 - Always use HTTPS for public deployments.
 - Use a separate key for each device.
+- Sync requests are signed with a per-share Ed25519 key; the device API key is
+  only used to create or revoke shares.
 - Do not expose port `47821` directly to the internet without a proxy.
 - Keep the TTL short for sensitive sessions.
 - Treat share URLs as public secrets: anyone with a link can read the share.
