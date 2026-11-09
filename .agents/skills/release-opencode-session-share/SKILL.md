@@ -1,5 +1,5 @@
 ---
-name: Release opencode-session-share
+name: release-opencode-session-share
 description: Cut, publish, and deploy an opencode-session-share service-only or full plugin/service release.
 ---
 
