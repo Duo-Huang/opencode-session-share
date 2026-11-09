@@ -167,13 +167,14 @@ Then run `/reload`, or restart the OpenCode service if needed.
 `opencode plugin update` updates the installed package but does not modify
 `options` in `opencode.jsonc`. Endpoint, keyId, and key stay as configured.
 
-v0.3.0 adds live agent activity metadata and requires service API version 3.
-Upgrade the service and plugin together.
+v0.3.2 adds revert-aware viewer positioning, live status fixes, and sparse
+pagination. It requires service API version 3; upgrade the service and plugin
+together.
 
 If you pin an exact version:
 
 ```jsonc
-"package": "opencode-session-share-plugin@0.3.0"
+"package": "opencode-session-share-plugin@0.3.2"
 ```
 
 `opencode plugin update` skips it. Change the version manually to upgrade.
