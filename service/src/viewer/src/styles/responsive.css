@@ -1,0 +1,39 @@
+@media (min-width: 1280px) {
+  .directory-rail {
+    display: flex;
+  }
+}
+
+@media (max-width: 1279px) {
+  .directory-preview {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .timeline-item {
+    grid-template-columns: 16px minmax(0, 1fr);
+    gap: 0.55rem;
+  }
+
+  .timeline-icon {
+    width: 16px;
+    height: 16px;
+    font-size: 8px;
+  }
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+
+  .code-block,
+  .terminal {
+    max-height: none;
+  }
+
+  .timeline-item {
+    break-inside: avoid;
+  }
+}

@@ -1,0 +1,92 @@
+.prose-share {
+  font-size: 0.9375rem;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.prose-share > :first-child {
+  margin-top: 0;
+}
+
+.prose-share > :last-child {
+  margin-bottom: 0;
+}
+
+.prose-share h1,
+.prose-share h2,
+.prose-share h3,
+.prose-share h4 {
+  line-height: 1.3;
+  margin: 1.25em 0 0.5em;
+  font-weight: 600;
+}
+
+.prose-share h1 {
+  font-size: 1.35em;
+}
+
+.prose-share h2 {
+  font-size: 1.2em;
+}
+
+.prose-share h3 {
+  font-size: 1.05em;
+}
+
+.prose-share p,
+.prose-share ul,
+.prose-share ol,
+.prose-share blockquote,
+.prose-share table {
+  margin: 0.75em 0;
+}
+
+.prose-share ul,
+.prose-share ol {
+  padding-left: 1.35rem;
+}
+
+.prose-share ul {
+  list-style: disc;
+}
+
+.prose-share ol {
+  list-style: decimal;
+}
+
+.prose-share blockquote {
+  border-left: 2px solid var(--line-strong);
+  padding-left: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.prose-share a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.prose-share code:not(.hljs) {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.08em 0.3em;
+  background: var(--page-soft);
+  font: 0.9em/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.prose-share table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+
+.prose-share th,
+.prose-share td {
+  border: 1px solid var(--line);
+  padding: 0.35rem 0.5rem;
+  text-align: left;
+}
+
+.prose-share th {
+  background: var(--page-soft);
+}

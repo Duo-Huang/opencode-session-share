@@ -1,0 +1,235 @@
+.load-edge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 1rem 0;
+  color: var(--ink-muted);
+  font-size: 11px;
+}
+
+.load-edge.load-before {
+  margin-bottom: 0.75rem;
+  border-bottom: 1px dashed var(--line);
+}
+
+.load-edge.load-after {
+  margin-top: 0.75rem;
+  border-top: 1px dashed var(--line);
+}
+
+.load-edge button {
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--page);
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.load-edge button:hover:not(:disabled) {
+  border-color: var(--ink-muted);
+  color: var(--ink);
+}
+
+.load-edge button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.timeline-gap .timeline-rail {
+  padding-top: 0;
+}
+
+.timeline-gap .timeline-line {
+  background: transparent;
+}
+
+.message-gap {
+  margin: 0.5rem 0;
+  border-top: 1px dashed var(--line);
+  border-bottom: 1px dashed var(--line);
+}
+
+.message-gap span {
+  letter-spacing: 0.01em;
+}
+
+.new-messages {
+  position: fixed;
+  bottom: 1.25rem;
+  left: 50%;
+  z-index: 35;
+  display: inline-flex;
+  align-items: center;
+  height: 2.2rem;
+  padding: 0 0.85rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--page);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.12);
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 11px;
+  transform: translateX(-50%);
+}
+
+.new-messages:hover {
+  border-color: var(--ink-muted);
+}
+
+@media (max-width: 640px) {
+  .directory-panel {
+    right: 0.75rem;
+    bottom: 4rem;
+    left: 0.75rem;
+    width: auto;
+  }
+}
+
+.directory-preview {
+  position: fixed;
+  right: max(0.75rem, calc((100vw - 56rem) / 2));
+  z-index: 40;
+  width: 18rem;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--page);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.12);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.directory-preview-role {
+  color: var(--ink-muted);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.directory-preview-text {
+  display: -webkit-box;
+  margin: 0.3rem 0 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
+.directory-preview-time {
+  margin-top: 0.35rem;
+  color: var(--ink-muted);
+  font-size: 10px;
+}
+
+.live-pill {
+  position: fixed;
+  top: 1rem;
+  right: 3.75rem;
+  z-index: 50;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 2rem;
+  padding: 0 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--page) 88%, transparent);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.08);
+  backdrop-filter: blur(10px);
+  color: var(--ink-muted);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #22c55e;
+  box-shadow: 0 0 0 0 rgb(34 197 94 / 0.35);
+  animation: live-pulse 2s infinite;
+}
+
+.live-pill[data-state="reconnecting"] .live-dot,
+.live-pill[data-state="stale"] .live-dot {
+  background: #f59e0b;
+  animation: none;
+}
+
+.live-pill[data-state="loading"] .live-dot {
+  background: #a3a3a3;
+  animation: none;
+}
+
+.live-pill[data-state="offline"] .live-dot,
+.live-pill[data-state="revoked"] .live-dot {
+  background: #ef4444;
+  animation: none;
+}
+
+@keyframes live-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgb(34 197 94 / 0.35);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgb(34 197 94 / 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgb(34 197 94 / 0);
+  }
+}
+
+.theme-toggle {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 50;
+  background: color-mix(in srgb, var(--page) 88%, transparent);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.08);
+  backdrop-filter: blur(10px);
+}
+
+.theme-toggle:hover {
+  background: var(--page-soft);
+}
+
+.scroll-controls {
+  position: fixed;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.scroll-control {
+  display: grid;
+  place-items: center;
+  width: 2.4rem;
+  height: 2.4rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--page);
+  color: var(--ink);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.08);
+  cursor: pointer;
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
+}
+
+.scroll-control:hover {
+  transform: translateY(-1px);
+}
+
+.scroll-control:active {
+  transform: translateY(0);
+}
