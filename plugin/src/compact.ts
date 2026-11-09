@@ -8,7 +8,10 @@ import type {
 const MARK = "\n… [truncated for share]"
 const REASONING_CAP = 32_768
 const OUTPUT_CAPS = [8_192, 4_096, 2_048, 1_024, 512, 0]
-const DEFAULT_BUDGET = 512 * 1024
+// Initial-upload budget. /share is latency-sensitive, so the first upload is
+// bounded; the full snapshot syncs immediately afterwards. 512KB is a good
+// default; 1-2MB is reasonable on fast/LAN links.
+const DEFAULT_UPLOAD_BUDGET_BYTES = 512 * 1024
 
 type Caps = { text: number; output: number; input: number }
 
@@ -105,9 +108,11 @@ function compactOnce(snapshot: ShareSnapshot, caps: Caps, flag: { value: boolean
  */
 export function compactForUpload(
   snapshot: ShareSnapshot,
-  maxBytes = DEFAULT_BUDGET,
+  maxBytes = DEFAULT_UPLOAD_BUDGET_BYTES,
 ): ShareSnapshot {
-  if (Buffer.byteLength(JSON.stringify(snapshot)) <= maxBytes) return snapshot
+  const budget =
+    Number.isFinite(maxBytes) && maxBytes >= 1024 ? maxBytes : DEFAULT_UPLOAD_BUDGET_BYTES
+  if (Buffer.byteLength(JSON.stringify(snapshot)) <= budget) return snapshot
 
   for (const output of OUTPUT_CAPS) {
     const flag = { value: false }
@@ -116,7 +121,7 @@ export function compactForUpload(
       { text: REASONING_CAP, output, input: Math.max(512, output) },
       flag,
     )
-    if (flag.value && Buffer.byteLength(JSON.stringify(compact)) <= maxBytes) {
+    if (flag.value && Buffer.byteLength(JSON.stringify(compact)) <= budget) {
       return compact
     }
   }

@@ -41,6 +41,11 @@ Do not keep both the string and the object entry.
 
 `endpoint` is required. Do not omit it; the plugin will fail with a clear error instead of guessing a server.
 
+Optional `uploadBudget` (bytes, default `524288`) bounds the first `/share`
+upload. The full snapshot is synced immediately afterwards. Raise it to
+`1048576`–`2097152` on fast/LAN links if the first page should include more of
+the session.
+
 ## Manual install
 
 Add the object above directly to `~/.config/opencode/opencode.jsonc`.

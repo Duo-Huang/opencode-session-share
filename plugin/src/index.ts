@@ -467,7 +467,7 @@ export default Plugin.define({
         if (!snapshot.messages.length) {
           throw new Error("Session has no shareable messages yet")
         }
-        const compacted = compactForUpload(snapshot)
+        const compacted = compactForUpload(snapshot, pluginOptions.uploadBudget)
         const keyPair = generateShareKeyPair()
         const result = await createShare(compacted, keyPair.publicKey, pluginOptions)
         const stored: StoredShare = {

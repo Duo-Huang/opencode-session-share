@@ -16,6 +16,7 @@ services:
       SHARE_DEFAULT_TTL_DAYS: ${SHARE_DEFAULT_TTL_DAYS:-1}
       SHARE_MAX_TTL_DAYS: ${SHARE_MAX_TTL_DAYS:-30}
       SHARE_MAX_BYTES: ${SHARE_MAX_BYTES:-15728640}
+      # Page payload target. 128KB is conservative; use 512KB on fast links/LAN.
       SHARE_VIEW_MAX_BYTES: ${SHARE_VIEW_MAX_BYTES:-131072}
       SHARE_DB_MAX_MB: ${SHARE_DB_MAX_MB:-1024}
       CF_ZONE_ID: ${CF_ZONE_ID:-}

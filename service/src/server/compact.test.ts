@@ -94,6 +94,33 @@ describe("buildMessagePage", () => {
     const text = assistant.content.find((part) => part.type === "text")
     expect(text && text.type === "text" ? text.text.length : 0).toBe(200_000)
   })
+
+  test("centers an around page and reports its byte size", () => {
+    const messages = Array.from({ length: 10 }, (_, index) => ({
+      role: "user" as const,
+      time: index,
+      text: "x".repeat(200),
+    }))
+    const page = buildMessagePage(messages, 1024, { around: 5 })
+
+    expect(page.start).toBeLessThan(5)
+    expect(page.end).toBeGreaterThan(5)
+    expect(page.start).toBeLessThanOrEqual(5)
+    expect(page.bytes).toBeGreaterThan(0)
+  })
+
+  test("fills backward when the around target is the last message", () => {
+    const messages = Array.from({ length: 10 }, (_, index) => ({
+      role: "user" as const,
+      time: index,
+      text: "x".repeat(200),
+    }))
+    const page = buildMessagePage(messages, 1024, { around: 9 })
+
+    expect(page.end).toBe(10)
+    expect(page.start).toBeLessThan(9)
+    expect(page.hasAfter).toBe(false)
+  })
 })
 
 describe("buildIndex", () => {

@@ -115,6 +115,7 @@ do not prompt again. `/unshare` does not reset that consent.
 | `endpoint` | yes | Base URL of the self-hosted service. |
 | `keyId` | yes | Device id before `:` in `SHARE_KEYS`. |
 | `key` | yes | Secret after `:` in `SHARE_KEYS`. |
+| `uploadBudget` | no | Initial `/share` upload budget in bytes (default `524288`). The full snapshot syncs immediately afterwards; raise to `1048576`–`2097152` on fast/LAN links. |
 
 ### Service environment
 
@@ -127,7 +128,7 @@ do not prompt again. `/unshare` does not reset that consent.
 | `SHARE_MAX_TTL_DAYS` | `30` | Maximum accepted lifetime. |
 | `SHARE_TOMBSTONE_DAYS` | `7` | How long revoked share metadata is retained. |
 | `SHARE_MAX_BYTES` | `15728640` | Maximum stored snapshot size. |
-| `SHARE_VIEW_MAX_BYTES` | `131072` | First-page payload target. |
+| `SHARE_VIEW_MAX_BYTES` | `131072` | Page payload target for initial, `around`, `start`, and `before` pages. |
 | `SHARE_DB_MAX_MB` | `1024` | SQLite size limit. |
 | `CF_ZONE_ID` | empty | Optional Cloudflare cache purge. |
 | `CF_CACHE_PURGE_TOKEN` | empty | Optional Cloudflare cache purge. |
@@ -135,6 +136,22 @@ do not prompt again. `/unshare` does not reset that consent.
 Per-share TTL is not exposed in the plugin yet; the service default applies at
 creation. Later session changes never extend it. Cloudflare is optional. Without it, public API responses use `no-store` and the
 service still works.
+
+### Page-size tuning
+
+`SHARE_VIEW_MAX_BYTES` applies to every viewer page, not just the first one.
+Changing it requires a service restart; existing shares do not need to be
+uploaded again.
+
+| Scenario | Suggested value |
+|---|---|
+| Default / mobile / slow links | `131072` (128KB) |
+| Fast links or LAN | `262144`–`524288` (256–512KB) |
+| Local-only or very fast links | `1048576`+ (1MB+) |
+
+Larger pages reduce pagination and gap fills, but increase first paint time,
+viewer memory, and the number of messages loaded at once. Keep it below
+`SHARE_MAX_BYTES`.
 
 ## Upgrade
 

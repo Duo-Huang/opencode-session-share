@@ -1354,6 +1354,24 @@ body {
   opacity: 0.55;
 }
 
+.timeline-gap .timeline-rail {
+  padding-top: 0;
+}
+
+.timeline-gap .timeline-line {
+  background: transparent;
+}
+
+.message-gap {
+  margin: 0.5rem 0;
+  border-top: 1px dashed var(--line);
+  border-bottom: 1px dashed var(--line);
+}
+
+.message-gap span {
+  letter-spacing: 0.01em;
+}
+
 .new-messages {
   position: fixed;
   bottom: 1.25rem;

@@ -17,6 +17,10 @@ export type PublicShare = ShareSnapshot & {
   expiresAt: number
   page: SharePageInfo
   index: ShareIndexItem[]
+  limits?: {
+    /** Server-side page payload target (`SHARE_VIEW_MAX_BYTES`). */
+    viewMaxBytes: number
+  }
   stats: {
     messages: number
     tools: number
@@ -25,10 +29,28 @@ export type PublicShare = ShareSnapshot & {
   }
 }
 
+export type LoadedRange = {
+  /** First message index in this loaded chunk, inclusive. */
+  start: number
+  /** Last message index in this loaded chunk, exclusive. */
+  end: number
+  /** Uncompressed JSON bytes of the messages in this chunk. */
+  bytes: number
+  /** Last time this chunk was used, for the bounded range cache. */
+  touchedAt: number
+}
+
+export type ShareView = Omit<PublicShare, "messages" | "page"> & {
+  messages: Map<number, ShareMessage>
+  ranges: LoadedRange[]
+  total: number
+}
+
 type PageData = {
   messages: ShareMessage[]
   page: SharePageInfo
   privacy?: PublicShare["privacy"]
+  limits?: PublicShare["limits"]
   updatedAt: number
 }
 
@@ -52,6 +74,17 @@ type Status = "loading" | "live" | "reconnecting" | "revoked" | "error"
 
 const REPO_URL = "https://github.com/Duo-Huang/opencode-session-share"
 const reconnectDelays = [1000, 2000, 5000, 10000, 30000]
+
+// Keep the sparse document bounded without giving up the initial window.
+const MAX_LOADED_RANGES = 4
+// The viewer cache is derived from the server's page budget. Four pages is
+// enough to keep the initial window, the live tail, and the jump target.
+const DEFAULT_VIEW_MAX_BYTES = 128 * 1024
+const LOADED_BYTES_MULTIPLIER = 4
+const MIN_LOADED_BYTES = 512 * 1024
+// Page-count policy for gap loading, not a byte limit. Increase only if the
+// server page budget is small; very large pages should stay at 1-2.
+const AUTO_FILL_MAX_PAGES = 2
 const STATUS_POLL_MS = 60_000
 const STATUS_RETRY_MS = 5_000
 const STATUS_MAX_MS = 60_000
@@ -318,8 +351,9 @@ type AssistantBlock =
 type TurnItem =
   | { kind: "assistant"; key: string; index: number; messages: AssistantEntry[] }
   | { kind: "message"; key: string; index: number; message: ShareMessage }
+  | { kind: "gap"; key: string; start: number; end: number }
 
-function buildDisplayTurns(messages: { message: ShareMessage; index: number }[]): TurnItem[] {
+function buildTurnItems(messages: { message: ShareMessage; index: number }[]): TurnItem[] {
   const items: TurnItem[] = []
   let group: { start: number; messages: AssistantEntry[] } | undefined
 
@@ -350,6 +384,102 @@ function buildDisplayTurns(messages: { message: ShareMessage; index: number }[])
   }
   flush()
   return items
+}
+
+function buildDisplayTurns(view: ShareView): TurnItem[] {
+  const items: TurnItem[] = []
+  let previousEnd: number | undefined
+  for (const range of view.ranges) {
+    if (previousEnd !== undefined && range.start > previousEnd) {
+      items.push({
+        kind: "gap",
+        key: `gap-${previousEnd}-${range.start}`,
+        start: previousEnd,
+        end: range.start,
+      })
+    }
+    const entries: { message: ShareMessage; index: number }[] = []
+    for (let index = range.start; index < range.end; index++) {
+      const message = view.messages.get(index)
+      if (message) entries.push({ message, index })
+    }
+    items.push(...buildTurnItems(entries))
+    previousEnd = range.end
+  }
+  return items
+}
+
+function hasBefore(view: ShareView) {
+  return (view.ranges[0]?.start ?? 0) > 0
+}
+
+function hasAfter(view: ShareView) {
+  return (view.ranges.at(-1)?.end ?? 0) < view.total
+}
+
+function toShareView(data: PublicShare): ShareView {
+  const { messages, page, ...meta } = data
+  const loaded = new Map<number, ShareMessage>()
+  messages.forEach((message, offset) => loaded.set(page.start + offset, message))
+  return {
+    ...meta,
+    messages: loaded,
+    ranges:
+      page.end > page.start
+        ? [{ start: page.start, end: page.end, bytes: page.bytes ?? 0, touchedAt: Date.now() }]
+        : [],
+    total: page.total,
+  }
+}
+
+function mergeLoadedRanges(ranges: LoadedRange[]): LoadedRange[] {
+  const sorted = [...ranges].sort((left, right) => left.start - right.start)
+  const merged: LoadedRange[] = []
+  for (const range of sorted) {
+    const last = merged.at(-1)
+    if (last && range.start <= last.end) {
+      last.end = Math.max(last.end, range.end)
+      last.bytes += range.bytes
+      last.touchedAt = Math.max(last.touchedAt, range.touchedAt)
+      continue
+    }
+    merged.push({ ...range })
+  }
+  return merged
+}
+
+function trimLoadedRanges(
+  ranges: LoadedRange[],
+  messages: Map<number, ShareMessage>,
+  focusIndex: number,
+  total: number,
+  maxBytes: number,
+): LoadedRange[] {
+  const pinned = new Set<LoadedRange>()
+  for (const range of ranges) {
+    if (range.start === 0) pinned.add(range)
+    if (range.end === total) pinned.add(range)
+    if (focusIndex >= range.start && focusIndex < range.end) {
+      range.touchedAt = Date.now()
+      pinned.add(range)
+    }
+  }
+  const candidates = ranges
+    .filter((range) => !pinned.has(range))
+    .sort((left, right) => left.touchedAt - right.touchedAt)
+  let bytes = ranges.reduce((sum, range) => sum + range.bytes, 0)
+  while (ranges.length > MAX_LOADED_RANGES || bytes > maxBytes) {
+    const victim = candidates.shift()
+    if (!victim) break
+    const index = ranges.indexOf(victim)
+    if (index === -1) continue
+    ranges.splice(index, 1)
+    for (let messageIndex = victim.start; messageIndex < victim.end; messageIndex++) {
+      messages.delete(messageIndex)
+    }
+    bytes -= victim.bytes
+  }
+  return ranges
 }
 
 function buildAssistantBlocks(entries: AssistantEntry[]): AssistantBlock[] {
@@ -426,10 +556,10 @@ function formatNumber(value: number) {
   return new Intl.NumberFormat().format(value)
 }
 
-function modelLabels(share: PublicShare) {
+function modelLabels(share: ShareView) {
   const models = new Set<string>()
   if (share.session.model) models.add(`${share.session.model.providerID}/${share.session.model.id}`)
-  for (const message of share.messages) {
+  for (const message of share.messages.values()) {
     if (message.role === "assistant" && message.model) {
       models.add(`${message.model.providerID}/${message.model.id}`)
     }
@@ -439,13 +569,14 @@ function modelLabels(share: PublicShare) {
 
 export function App() {
   const id = location.pathname.split("/").filter(Boolean).pop() ?? ""
-  const [share, setShare] = createSignal<PublicShare | null>(null)
+  const [share, setShare] = createSignal<ShareView | null>(null)
   const [status, setStatus] = createSignal<Status>("loading")
   const [error, setError] = createSignal("")
   const [showBottom, setShowBottom] = createSignal(false)
   const [showTop, setShowTop] = createSignal(false)
   const [clock, setClock] = createSignal(Date.now())
   const [scrollTick, setScrollTick] = createSignal(0)
+  const [scrollDirection, setScrollDirection] = createSignal<"up" | "down">("down")
   const [activeDirectoryId, setActiveDirectoryId] = createSignal("")
   const [directoryOpen, setDirectoryOpen] = createSignal(false)
   const [themeMode, setThemeMode] = createSignal<ThemeMode>(loadThemeMode())
@@ -523,34 +654,49 @@ export function App() {
   const applySnapshot = (data: PublicShare) => {
     const current = share()
     if (!current) {
-      setShare(data)
+      setShare(toShareView(data))
       return
     }
     if (data.updatedAt <= current.updatedAt) return
-
-    if (current.page.start === 0 && current.page.end <= data.page.end) {
-      setShare(data)
+    // A compaction or rewritten active context invalidates message indices.
+    if (data.page.total < current.total) {
+      ++pageRequest
+      setLoadingPage(false)
+      setLoadingTail(false)
+      setShare(toShareView(data))
+      setNewMessages(false)
       return
     }
 
-    // Keep the window the reader is on. Only refresh the global metadata,
-    // stats and directory index.
+    const onlyInitialRange =
+      current.ranges.length === 1 && current.ranges[0].start === 0
+    // Keep the initial window fresh for streaming content, matching the old
+    // single-window behavior. Once the reader has jumped, historical ranges
+    // stay put and only metadata is refreshed.
+    if (onlyInitialRange && data.page.start === 0 && current.ranges[0].end <= data.page.end) {
+      setShare(toShareView(data))
+      return
+    }
+
+    const { messages: _messages, page: _page, ...meta } = data
     setShare({
       ...current,
-      ...data,
+      ...meta,
       messages: current.messages,
-      page: current.page,
+      ranges: current.ranges,
+      total: data.page.total,
     })
-    if (data.page.total > current.page.total) setNewMessages(true)
+    if (data.page.total > current.total) setNewMessages(true)
   }
 
   const fetchPage = async (
-    cursor: { start?: number; before?: number },
+    cursor: { start?: number; before?: number; around?: number },
     signal?: AbortSignal,
   ): Promise<PageData> => {
     const query = new URLSearchParams()
     if (cursor.start !== undefined) query.set("start", String(cursor.start))
     if (cursor.before !== undefined) query.set("before", String(cursor.before))
+    if (cursor.around !== undefined) query.set("around", String(cursor.around))
     const response = await fetch(
       `/api/public/shares/${encodeURIComponent(id)}/messages?${query.toString()}`,
       { cache: "no-store", signal },
@@ -567,57 +713,136 @@ export function App() {
     return (await response.json()) as PageData
   }
 
-  const mergePage = (data: PageData, mode: "replace" | "append" | "prepend") => {
-    const current = share()
-    if (!current) return
-    if (mode === "replace") {
-      setShare({
+  const insertPage = (data: PageData, evict = false) => {
+    setShare((current) => {
+      if (!current) return current
+      const messages = new Map(current.messages)
+      data.messages.forEach((message, offset) => messages.set(data.page.start + offset, message))
+      const ranges = mergeLoadedRanges([
+        ...current.ranges,
+        ...(data.page.end > data.page.start
+          ? [
+              {
+                start: data.page.start,
+                end: data.page.end,
+                bytes: data.page.bytes ?? 0,
+                touchedAt: Date.now(),
+              },
+            ]
+          : []),
+      ])
+      // Only jumps enforce the bounded cache. Sequential scrolling and gap
+      // loading keep their content; evicting an above-viewport range there
+      // would shift the reader's scroll position.
+      if (evict) {
+        const limit = current.limits?.viewMaxBytes ?? DEFAULT_VIEW_MAX_BYTES
+        const maxBytes = Math.max(MIN_LOADED_BYTES, limit * LOADED_BYTES_MULTIPLIER)
+        trimLoadedRanges(ranges, messages, data.page.start, data.page.total, maxBytes)
+      }
+      return {
         ...current,
-        messages: data.messages,
-        page: data.page,
+        limits: data.limits ?? current.limits,
+        messages,
+        ranges,
+        total: data.page.total,
         privacy: data.privacy ?? current.privacy,
         updatedAt: Math.max(current.updatedAt, data.updatedAt),
-      })
-      return
-    }
-    if (mode === "append") {
-      setShare({
-        ...current,
-        messages: [...current.messages, ...data.messages],
-        page: {
-          ...data.page,
-          start: current.page.start,
-          hasBefore: current.page.hasBefore,
-        },
-        updatedAt: Math.max(current.updatedAt, data.updatedAt),
-      })
-      return
-    }
-    setShare({
-      ...current,
-      messages: [...data.messages, ...current.messages],
-      page: {
-        ...current.page,
-        start: data.page.start,
-        total: data.page.total,
-        hasBefore: data.page.hasBefore,
-      },
-      updatedAt: Math.max(current.updatedAt, data.updatedAt),
+      }
     })
+  }
+
+  const fillAdjacentGaps = async (request: number, targetIndex: number) => {
+    const current = share()
+    if (!current) return
+    const targetRange = current.ranges.find(
+      (range) => targetIndex >= range.start && targetIndex < range.end,
+    )
+    if (!targetRange) return
+
+    // One page from the target side of the preceding gap. The page ends at
+    // targetRange.start, so it always merges with the target range.
+    const index = current.ranges.indexOf(targetRange)
+    const previous = index > 0 ? current.ranges[index - 1] : undefined
+    if (targetRange.start > 0 && (!previous || previous.end < targetRange.start)) {
+      const data = await fetchPage({ before: targetRange.start })
+      if (request !== pageRequest) return
+      insertPage(data, true)
+    }
+
+    // Re-read the target after the insert: the preceding page may have merged.
+    const updated = share()
+    const updatedTarget = updated?.ranges.find(
+      (range) => targetIndex >= range.start && targetIndex < range.end,
+    )
+    if (!updated || !updatedTarget) return
+    const updatedIndex = updated.ranges.indexOf(updatedTarget)
+    const next =
+      updatedIndex + 1 < updated.ranges.length ? updated.ranges[updatedIndex + 1] : undefined
+    if (updatedTarget.end < updated.total && (!next || next.start > updatedTarget.end)) {
+      const data = await fetchPage({ start: updatedTarget.end })
+      if (request !== pageRequest) return
+      insertPage(data, true)
+    }
+  }
+
+  const loadGap = async (start: number, end: number, direction: "up" | "down") => {
+    const current = share()
+    if (!current || loadingPage()) return
+    const request = ++pageRequest
+    const height = document.documentElement.scrollHeight
+    const top = window.scrollY
+    setLoadingPage(true)
+    try {
+      if (direction === "up") {
+        // Fill backward from the target/lower side so the nearest messages
+        // appear first. The height adjustment keeps the reader's content in
+        // place while the new page is inserted above the viewport.
+        let cursor = end
+        for (let page = 0; page < AUTO_FILL_MAX_PAGES && cursor > start; page++) {
+          const data = await fetchPage({ before: cursor })
+          if (request !== pageRequest) return
+          insertPage(data)
+          if (data.page.start >= cursor) break
+          cursor = data.page.start
+        }
+        if (request === pageRequest) {
+          queueMicrotask(() => {
+            requestAnimationFrame(() => {
+              const delta = document.documentElement.scrollHeight - height
+              if (delta > 0) window.scrollTo({ top: top + delta, behavior: "auto" })
+            })
+          })
+        }
+      } else {
+        let cursor = start
+        for (let page = 0; page < AUTO_FILL_MAX_PAGES && cursor < end; page++) {
+          const data = await fetchPage({ start: cursor })
+          if (request !== pageRequest) return
+          insertPage(data)
+          if (data.page.end <= cursor) break
+          cursor = data.page.end
+        }
+      }
+    } catch {
+      // Keep the gap; the reader can retry.
+    } finally {
+      if (request === pageRequest) setLoadingPage(false)
+    }
   }
 
   const loadNextPage = async (force = false) => {
     const current = share()
-    if (!current || loadingPage() || (!force && !current.page.hasAfter)) return
+    const last = current?.ranges.at(-1)
+    if (!current || !last || loadingPage() || (!force && !hasAfter(current))) return
     const follow =
       force &&
       window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 240
     const request = ++pageRequest
     setLoadingPage(true)
     try {
-      const data = await fetchPage({ start: current.page.end })
+      const data = await fetchPage({ start: last.end })
       if (request !== pageRequest) return
-      mergePage(data, data.page.start === current.page.end ? "append" : "replace")
+      insertPage(data)
       setNewMessages(false)
       if (follow) {
         queueMicrotask(() => {
@@ -635,15 +860,16 @@ export function App() {
 
   const loadPreviousPage = async () => {
     const current = share()
-    if (!current || loadingPage() || !current.page.hasBefore) return
+    const first = current?.ranges[0]
+    if (!current || !first || loadingPage() || !hasBefore(current)) return
     const request = ++pageRequest
     const height = document.documentElement.scrollHeight
     const top = window.scrollY
     setLoadingPage(true)
     try {
-      const data = await fetchPage({ before: current.page.start })
+      const data = await fetchPage({ before: first.start })
       if (request !== pageRequest) return
-      mergePage(data, data.page.end === current.page.start ? "prepend" : "replace")
+      insertPage(data)
       queueMicrotask(() => {
         requestAnimationFrame(() => {
           const delta = document.documentElement.scrollHeight - height
@@ -664,9 +890,9 @@ export function App() {
     setLoadingPage(true)
     setLoadingTail(true)
     try {
-      const data = await fetchPage({ before: current.page.total })
+      const data = await fetchPage({ before: current.total })
       if (request !== pageRequest) return
-      mergePage(data, "replace")
+      insertPage(data, true)
       setNewMessages(false)
       queueMicrotask(() => {
         requestAnimationFrame(() => {
@@ -684,7 +910,7 @@ export function App() {
   const goToFirstPage = async () => {
     const current = share()
     if (!current || loadingPage()) return
-    if (!current.page.hasBefore) {
+    if (!hasBefore(current)) {
       window.scrollTo({ top: 0, behavior: "smooth" })
       return
     }
@@ -693,7 +919,7 @@ export function App() {
     try {
       const data = await fetchPage({ start: 0 })
       if (request !== pageRequest) return
-      mergePage(data, "replace")
+      insertPage(data, true)
       queueMicrotask(() => {
         requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }))
       })
@@ -706,7 +932,7 @@ export function App() {
 
   const goToBottom = () => {
     const current = share()
-    if (current?.page.hasAfter) {
+    if (current && hasAfter(current)) {
       void loadTail()
       return
     }
@@ -722,15 +948,19 @@ export function App() {
     }
     const current = share()
     if (!current || loadingPage()) return
+    const targetIndex = /^[mp]-(\d+)/.exec(target)?.[1]
+    const around = targetIndex === undefined ? messageIndex : Number(targetIndex)
     const request = ++pageRequest
     setLoadingPage(true)
     try {
-      const data = await fetchPage({ start: messageIndex })
+      const data = await fetchPage({ around })
       if (request !== pageRequest) return
-      mergePage(data, "replace")
+      insertPage(data, true)
+      await fillAdjacentGaps(request, Math.max(0, Math.min(around, data.page.total - 1)))
+      if (request !== pageRequest) return
       setPendingTarget(target)
     } catch {
-      // Leave the current page in place.
+      // Leave the loaded ranges in place.
     } finally {
       if (request === pageRequest) setLoadingPage(false)
     }
@@ -744,8 +974,11 @@ export function App() {
     }
     if (data.updatedAt <= current.updatedAt) return
 
-    if (data.total < current.page.total) {
+    if (data.total < current.total) {
       // Compaction or a rewritten active context invalidates message indices.
+      ++pageRequest
+      setLoadingPage(false)
+      setLoadingTail(false)
       setShare(null)
       void refresh(true)
       return
@@ -763,18 +996,14 @@ export function App() {
       stats: data.stats,
       index: data.index,
       privacy: data.privacy,
-      page: {
-        ...current.page,
-        total: data.total,
-        hasAfter: current.page.end < data.total ? true : current.page.hasAfter,
-      },
+      total: data.total,
     })
 
-    if (data.total > current.page.total) {
+    if (data.total > current.total) {
       setNewMessages(true)
       const atBottom =
         window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 240
-      if (atBottom && !current.page.hasAfter) void loadNextPage(true)
+      if (atBottom && !hasAfter(current)) void loadNextPage(true)
     }
   }
 
@@ -795,6 +1024,9 @@ export function App() {
       clearTimeout(reconnectTimer)
       reconnectTimer = undefined
     }
+    ++pageRequest
+    setLoadingPage(false)
+    setLoadingTail(false)
     setShare(null)
     setStatus("revoked")
     socket?.close()
@@ -1010,17 +1242,20 @@ export function App() {
     const onScroll = () => {
       const current = share()
       const scrollingUp = window.scrollY < lastScrollY - 2
+      if (window.scrollY !== lastScrollY) {
+        setScrollDirection(scrollingUp ? "up" : "down")
+      }
       const atBottom =
         window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 700
       const atTop = window.scrollY < 260
-      setShowTop(window.scrollY > 400 || !!current?.page.hasBefore)
+      setShowTop(window.scrollY > 400 || (!!current && hasBefore(current)))
       setShowBottom(
-        !!current?.page.hasAfter ||
+        (!!current && hasAfter(current)) ||
           (window.scrollY > 500 &&
             window.innerHeight + window.scrollY < document.body.scrollHeight - 120),
       )
-      if (current && atBottom && current.page.hasAfter) void loadNextPage()
-      if (current && atTop && current.page.hasBefore && scrollingUp) void loadPreviousPage()
+      if (current && atBottom && hasAfter(current)) void loadNextPage()
+      if (current && atTop && hasBefore(current) && scrollingUp) void loadPreviousPage()
       lastScrollY = window.scrollY
       if (activeFrame === undefined) {
         activeFrame = window.requestAnimationFrame(() => {
@@ -1137,27 +1372,33 @@ export function App() {
     return `Snapshot updated ${formatDuration(Math.max(0, clock() - current.updatedAt))} ago`
   }
 
-  const indexedMessages = createMemo(() => {
+  const displayTurns = createMemo(() => {
     const current = share()
-    if (!current) return []
-    return current.messages.map((message, index) => ({
-      message,
-      index: current.page.start + index,
-    }))
+    return current ? buildDisplayTurns(current) : []
   })
 
-  const displayTurns = createMemo(() => buildDisplayTurns(indexedMessages()))
+  const canLoadBefore = createMemo(() => {
+    const current = share()
+    return !!current && hasBefore(current)
+  })
+
+  const canLoadAfter = createMemo(() => {
+    const current = share()
+    return !!current && hasAfter(current)
+  })
 
   const lastTextId = createMemo(() => {
     const current = share()
-    if (!current || current.page.hasAfter) return ""
-    for (let index = current.messages.length - 1; index >= 0; index--) {
-      const message = current.messages[index]
-      if (message.role !== "assistant") continue
+    if (!current || hasAfter(current)) return ""
+    const lastRange = current.ranges.at(-1)
+    if (!lastRange) return ""
+    for (let index = lastRange.end - 1; index >= lastRange.start; index--) {
+      const message = current.messages.get(index)
+      if (!message || message.role !== "assistant") continue
       for (let partIndex = message.content.length - 1; partIndex >= 0; partIndex--) {
         const part = message.content[partIndex]
         if (part.type === "text" && part.text.trim()) {
-          return `p-${current.page.start + index}-${partIndex}`
+          return `p-${index}-${partIndex}`
         }
       }
     }
@@ -1194,8 +1435,9 @@ export function App() {
     if (!target) return
     const current = share()
     if (!current) return
-    void current.messages.length
-    void current.page.end
+    void current.messages.size
+    void current.ranges.length
+    void current.total
     queueMicrotask(() => {
       const element = document.getElementById(target)
       if (!element) return
@@ -1206,8 +1448,9 @@ export function App() {
 
   createEffect(() => {
     const current = share()
-    if (!current || loadingPage() || !current.page.hasAfter) return
-    void current.page.end
+    if (!current || loadingPage() || !hasAfter(current)) return
+    void current.ranges.length
+    void current.total
     queueMicrotask(() => {
       if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 400) {
         void loadNextPage()
@@ -1406,7 +1649,7 @@ export function App() {
       <Show when={share()}>
         {(current) => (
           <main class="timeline">
-            <Show when={current().page.hasBefore}>
+            <Show when={hasBefore(current())}>
               <div class="load-edge load-before">
                 <span>Earlier messages are not loaded</span>
                 <button
@@ -1420,6 +1663,23 @@ export function App() {
             </Show>
             <For each={displayTurns()}>
               {(turn, turnIndex) => {
+                if (turn.kind === "gap") {
+                  return (
+                    <div class="timeline-item timeline-gap" data-gap={`${turn.start}-${turn.end}`}>
+                      <div class="timeline-rail">
+                        <span class="timeline-line" />
+                      </div>
+                      <div class="timeline-content">
+                        <MessageGap
+                          start={turn.start}
+                          end={turn.end}
+                          loading={loadingPage()}
+                          onLoad={() => void loadGap(turn.start, turn.end, scrollDirection())}
+                        />
+                      </div>
+                    </div>
+                  )
+                }
                 if (turn.kind === "assistant") {
                   return (
                     <div class="timeline-item" data-role="assistant">
@@ -1436,6 +1696,7 @@ export function App() {
                           lastTextId={lastTextId()}
                           running={
                             current().session.running === true &&
+                            !hasAfter(current()) &&
                             turnIndex() === displayTurns().length - 1
                           }
                         />
@@ -1471,12 +1732,12 @@ export function App() {
               when={
                 current().session.running === true &&
                 displayTurns().at(-1)?.kind !== "assistant" &&
-                !current().page.hasAfter
+                !hasAfter(current())
               }
             >
               <AssistantWorking label="Waiting for the assistant…" />
             </Show>
-            <Show when={current().page.hasAfter}>
+            <Show when={hasAfter(current())}>
               <div class="load-edge load-after">
                 <button
                   type="button"
@@ -1682,7 +1943,7 @@ export function App() {
         <button
           type="button"
           class={`scroll-control ${
-            showTop() || share()?.page.hasBefore ? "" : "pointer-events-none opacity-0"
+            showTop() || canLoadBefore() ? "" : "pointer-events-none opacity-0"
           }`}
           aria-label="Back to top"
           title="Back to top"
@@ -1693,7 +1954,7 @@ export function App() {
         <button
           type="button"
           class={`scroll-control ${
-            showBottom() || share()?.page.hasAfter ? "" : "pointer-events-none opacity-0"
+            showBottom() || canLoadAfter() ? "" : "pointer-events-none opacity-0"
           }`}
           aria-label="Scroll to bottom"
           title="Scroll to bottom"
@@ -1732,6 +1993,47 @@ function StatusBadge(props: { status: Status }) {
       <span class={`h-1.5 w-1.5 rounded-full ${color()}`} />
       {label()}
     </span>
+  )
+}
+
+function MessageGap(props: {
+  start: number
+  end: number
+  loading: boolean
+  onLoad: () => void
+}) {
+  let element: HTMLDivElement | undefined
+  const [visible, setVisible] = createSignal(false)
+
+  onMount(() => {
+    if (!element) return
+    const observer = new IntersectionObserver(
+      (entries) => setVisible(entries.some((entry) => entry.isIntersecting)),
+      { rootMargin: "0px", threshold: 0 },
+    )
+    observer.observe(element)
+    onCleanup(() => observer.disconnect())
+  })
+
+  createEffect(() => {
+    if (!visible() || props.loading) return
+    // The gap only loads when it actually enters the viewport. Jump-time
+    // auto-fill already handled the adjacent page.
+    props.onLoad()
+  })
+
+  return (
+    <div
+      ref={element}
+      class="load-edge message-gap"
+      data-gap={`${props.start}-${props.end}`}
+      role="status"
+    >
+      <span>{props.end - props.start} messages not loaded</span>
+      <button type="button" disabled={props.loading} onClick={() => props.onLoad()}>
+        {props.loading ? "Loading…" : "Load messages"}
+      </button>
+    </div>
   )
 }
 

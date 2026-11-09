@@ -105,6 +105,8 @@ export type SharePageInfo = {
   total: number
   hasBefore: boolean
   hasAfter: boolean
+  /** Uncompressed JSON bytes of the messages in this page, when known. */
+  bytes?: number
 }
 
 export type ShareSession = {

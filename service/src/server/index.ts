@@ -189,10 +189,12 @@ function publicPayload(row: ShareRow) {
       total: view.total,
       hasBefore: view.hasBefore,
       hasAfter: view.hasAfter,
+      bytes: view.bytes,
     },
     index: view.index,
     privacy: view.privacy,
     stats: view.stats,
+    limits: { viewMaxBytes: config.viewMaxBytes },
     id: row.id,
     updatedAt: row.updated_at,
     expiresAt: row.expires_at,
@@ -201,7 +203,7 @@ function publicPayload(row: ShareRow) {
 
 function pagePayload(
   row: ShareRow,
-  cursor: { start?: number; before?: number },
+  cursor: { start?: number; before?: number; around?: number },
 ) {
   const snapshot = readSnapshot(row)
   if (!snapshot) return null
@@ -214,8 +216,10 @@ function pagePayload(
       total: view.total,
       hasBefore: view.hasBefore,
       hasAfter: view.hasAfter,
+      bytes: view.bytes,
     },
     privacy: view.privacy,
+    limits: { viewMaxBytes: config.viewMaxBytes },
     updatedAt: row.updated_at,
   }
 }
@@ -704,19 +708,22 @@ app.get("/api/public/shares/:id/messages", async (c) => {
 
   const startRaw = c.req.query("start")
   const beforeRaw = c.req.query("before")
-  if (startRaw !== undefined && beforeRaw !== undefined) {
+  const aroundRaw = c.req.query("around")
+  if ([startRaw, beforeRaw, aroundRaw].filter((value) => value !== undefined).length > 1) {
     return c.json({ error: "invalid_cursor" }, 400, noStore())
   }
   const start = startRaw === undefined ? undefined : Number(startRaw)
   const before = beforeRaw === undefined ? undefined : Number(beforeRaw)
+  const around = aroundRaw === undefined ? undefined : Number(aroundRaw)
   if (
     (start !== undefined && (!Number.isInteger(start) || start < 0)) ||
-    (before !== undefined && (!Number.isInteger(before) || before < 0))
+    (before !== undefined && (!Number.isInteger(before) || before < 0)) ||
+    (around !== undefined && (!Number.isInteger(around) || around < 0))
   ) {
     return c.json({ error: "invalid_cursor" }, 400, noStore())
   }
 
-  const payload = pagePayload(row, { start, before })
+  const payload = pagePayload(row, { start, before, around })
   if (!payload) return c.json({ error: "invalid_snapshot" }, 500, noStore())
   return c.json(payload, 200, noStore())
 })

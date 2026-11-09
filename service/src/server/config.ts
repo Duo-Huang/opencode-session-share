@@ -5,6 +5,10 @@ const bool = z
   .optional()
   .transform((value) => value === "true" || value === "1")
 
+// Conservative default. 256-512KB is comfortable on fast links/LAN; 1MB+
+// reduces pagination but increases first paint and viewer cache.
+const DEFAULT_VIEW_MAX_BYTES = 128 * 1024
+
 const Env = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(47821),
   SHARE_KEYS: z.string().min(1),
@@ -19,12 +23,13 @@ const Env = z.object({
   SHARE_MAX_TTL_DAYS: z.coerce.number().min(0).max(365).default(30),
   SHARE_TOMBSTONE_DAYS: z.coerce.number().min(1).max(365).default(7),
   SHARE_MAX_BYTES: z.coerce.number().int().min(1024).max(100 * 1024 * 1024).default(15 * 1024 * 1024),
+  // Page payload target for every cursor (initial, around, start, before).
   SHARE_VIEW_MAX_BYTES: z.coerce
     .number()
     .int()
     .min(64 * 1024)
     .max(10 * 1024 * 1024)
-    .default(128 * 1024),
+    .default(DEFAULT_VIEW_MAX_BYTES),
   SHARE_DB_MAX_MB: z.coerce.number().int().min(16).default(1024),
   SHARE_TRACK_VIEWS: bool,
   CF_ZONE_ID: z.string().optional(),

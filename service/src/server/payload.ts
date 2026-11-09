@@ -163,7 +163,12 @@ export type LiveView = {
 
 export type SearchResult = ShareIndexItem
 
-type PageCursor = { start?: number; before?: number }
+type PageCursor = { start?: number; before?: number; around?: number }
+
+// Reserve for the page envelope and JSON overhead. The actual page can exceed
+// SHARE_VIEW_MAX_BYTES when a single complete message is larger.
+const PAGE_OVERHEAD_BYTES = 4096
+const MIN_PAGE_BUDGET_BYTES = 1024
 
 const BODY_TRUNCATION = /\n… \[truncated(?: for share| \d+ chars)\]$/
 const PREVIEW_LIMIT = 80
@@ -269,16 +274,41 @@ export function buildMessagePage(
 ): ShareMessagePage {
   const total = messages.length
   if (!total) {
-    return { messages: [], start: 0, end: 0, total: 0, hasBefore: false, hasAfter: false }
+    return { messages: [], start: 0, end: 0, total: 0, hasBefore: false, hasAfter: false, bytes: 0 }
   }
-  const budget = Math.max(1024, maxBytes - 4096)
+  const budget = Math.max(MIN_PAGE_BUDGET_BYTES, maxBytes - PAGE_OVERHEAD_BYTES)
   const size = (message: SnapshotMessage) => Buffer.byteLength(JSON.stringify(message)) + 1
 
   let start: number
   let end: number
   let bytes = 0
 
-  if (cursor.before !== undefined) {
+  if (cursor.around !== undefined) {
+    const target = Math.max(0, Math.min(cursor.around, total - 1))
+    start = target
+    end = target + 1
+    bytes = size(messages[target])
+    let forward = true
+    while (start > 0 || end < total) {
+      if (forward && end < total) {
+        const next = size(messages[end])
+        if (bytes + next > budget) break
+        bytes += next
+        end++
+      } else if (start > 0) {
+        const next = size(messages[start - 1])
+        if (bytes + next > budget) break
+        bytes += next
+        start--
+      } else if (end < total) {
+        const next = size(messages[end])
+        if (bytes + next > budget) break
+        bytes += next
+        end++
+      }
+      forward = !forward
+    }
+  } else if (cursor.before !== undefined) {
     end = Math.max(0, Math.min(cursor.before, total))
     if (end === 0) end = 1
     start = end
@@ -308,6 +338,7 @@ export function buildMessagePage(
     total,
     hasBefore: start > 0,
     hasAfter: end < total,
+    bytes,
   }
 }
 

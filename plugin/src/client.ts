@@ -12,6 +12,11 @@ export type PluginOptions = {
   endpoint?: string
   keyId?: string
   key?: string
+  /**
+   * Initial /share upload budget in bytes. The full snapshot is synced
+   * immediately afterwards. Defaults to 512KB; raise on fast/LAN links.
+   */
+  uploadBudget?: number
 }
 
 export type ShareMeta = {
