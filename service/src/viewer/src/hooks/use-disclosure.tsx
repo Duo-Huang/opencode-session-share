@@ -9,23 +9,21 @@ const DisclosureContext = createContext<DisclosureStore>()
 
 /** Keep disclosure state scoped to one viewer instance instead of a module global. */
 export function DisclosureProvider(props: { children: JSX.Element }) {
-  const [state, setState] = createSignal<Map<string, boolean>>(new Map())
+  // Each component mirrors its own key in a local signal, so the store itself
+  // does not need to be reactive.
+  const state = new Map<string, boolean>()
 
   const store: DisclosureStore = {
-    get: (key) => state().get(key),
+    get: (key) => state.get(key),
     set: (key, value) => {
-      setState((current) => {
-        const next = new Map(current)
-        next.set(key, value)
-        // This is only a UI nicety, but an unbounded map would grow for the
-        // lifetime of the tab as the reader opens tool cards.
-        while (next.size > 500) {
-          const oldest = next.keys().next().value
-          if (oldest === undefined) break
-          next.delete(oldest)
-        }
-        return next
-      })
+      state.set(key, value)
+      // This is only a UI nicety, but an unbounded map would grow for the
+      // lifetime of the tab as the reader opens tool cards.
+      while (state.size > 500) {
+        const oldest = state.keys().next().value
+        if (oldest === undefined) break
+        state.delete(oldest)
+      }
     },
   }
 
