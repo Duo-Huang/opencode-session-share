@@ -41,7 +41,8 @@ export type ShareToolPart = {
   type: "tool"
   name: string
   status: "completed" | "error"
-  input: unknown
+  /** Missing when details were omitted from the stored snapshot. */
+  input?: unknown
   output?: string
   error?: string
   durationMs?: number
@@ -131,4 +132,50 @@ export type ShareSnapshot = {
   session: ShareSession
   privacy?: SharePrivacy
   messages: ShareMessage[]
+}
+
+export type ShareStats = {
+  messages: number
+  tools: number
+  cost: number
+  tokens: { input: number; output: number; reasoning: number }
+}
+
+export type ShareLimits = {
+  viewMaxBytes: number
+}
+
+/** Initial public payload returned by the service. */
+export type PublicShareResponse = ShareSnapshot & {
+  id: string
+  updatedAt: number
+  expiresAt: number
+  page: SharePageInfo
+  index: ShareIndexItem[]
+  limits?: ShareLimits
+  stats: ShareStats
+}
+
+/** One page from `/api/public/shares/:id/messages`. */
+export type PublicMessagePage = {
+  messages: ShareMessage[]
+  page: SharePageInfo
+  privacy?: SharePrivacy
+  limits?: ShareLimits
+  updatedAt: number
+}
+
+/** WebSocket live update (metadata only). */
+export type PublicLiveUpdate = {
+  id: string
+  updatedAt: number
+  expiresAt: number
+  title: string
+  createdAt: number
+  source: ShareSnapshot["source"]
+  session: ShareSession
+  stats: ShareStats
+  index: ShareIndexItem[]
+  privacy?: SharePrivacy
+  total: number
 }

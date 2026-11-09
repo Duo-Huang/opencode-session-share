@@ -5,6 +5,11 @@ import { serveStatic } from "hono/bun"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { gzipSync, gunzipSync } from "node:zlib"
+import type {
+  PublicLiveUpdate,
+  PublicMessagePage,
+  PublicShareResponse,
+} from "../../../shared/types"
 import { config } from "./config"
 import { authenticate } from "./auth"
 import {
@@ -176,7 +181,7 @@ function readSnapshot(row: ShareRow): ValidShareSnapshot | null {
   }
 }
 
-function publicPayload(row: ShareRow) {
+function publicPayload(row: ShareRow): PublicShareResponse | null {
   const snapshot = readSnapshot(row)
   if (!snapshot) return null
   const view = buildShareView(snapshot, config.viewMaxBytes)
@@ -204,7 +209,7 @@ function publicPayload(row: ShareRow) {
 function pagePayload(
   row: ShareRow,
   cursor: { start?: number; before?: number; around?: number },
-) {
+): PublicMessagePage | null {
   const snapshot = readSnapshot(row)
   if (!snapshot) return null
   const view = buildPageView(snapshot, config.viewMaxBytes, cursor)
@@ -229,7 +234,7 @@ function livePayload(
   id: string,
   updatedAt: number,
   expiresAt: number,
-) {
+): PublicLiveUpdate {
   const view = buildLiveView(snapshot)
   return {
     id,

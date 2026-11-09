@@ -1,5 +1,12 @@
 import { z } from "zod"
-import type { ShareIndexItem, SharePageInfo, SharePrivacy } from "../../../shared/types"
+import type {
+  ShareIndexItem,
+  SharePageInfo,
+  SharePrivacy,
+  ShareStats,
+} from "../../../shared/types"
+
+export type { ShareStats }
 
 const ModelRef = z
   .object({
@@ -137,13 +144,6 @@ export const ShareSnapshotSchema = z
 
 export type ValidShareSnapshot = z.infer<typeof ShareSnapshotSchema>
 type SnapshotMessage = ValidShareSnapshot["messages"][number]
-export type ShareStats = {
-  messages: number
-  tools: number
-  cost: number
-  tokens: { input: number; output: number; reasoning: number }
-}
-
 export type ShareMessagePage = SharePageInfo & {
   messages: SnapshotMessage[]
 }
