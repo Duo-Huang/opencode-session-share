@@ -51,6 +51,8 @@ export function trimToTotal(
   for (const [index, message] of messages) {
     if (index < total) nextMessages.set(index, message)
   }
+  // `bytes` stays as the original range estimate. It is only used as an upper
+  // bound for cache eviction, so overestimating a clipped range is safe.
   const nextRanges = ranges
     .map((range) => ({ ...range, end: Math.min(range.end, total) }))
     .filter((range) => range.start < range.end)
