@@ -26,7 +26,7 @@ type ShareState = StoredShare & {
   storageKey: string
   timer?: ReturnType<typeof setTimeout>
   dirty: boolean
-  running: boolean
+  syncing: boolean
   lastEventAt?: number
 }
 
@@ -39,11 +39,31 @@ type StoredShareItem = {
 
 const SHARE_CONSENT_KEY = "share_consent_v2"
 
-// Content is uploaded at part boundaries, not for every delta. The final
-// snapshot is also flushed on session.idle.
+const EXECUTION_EVENTS = [
+  "session.execution.started",
+  "session.execution.succeeded",
+  "session.execution.failed",
+  "session.execution.interrupted",
+] as const
+
+const TERMINAL_EXECUTION_EVENTS = new Set<string>([
+  "session.execution.succeeded",
+  "session.execution.failed",
+  "session.execution.interrupted",
+])
+
+// Mirror the TUI's busy state: started → running, any terminal event → idle.
+const executionRunning = (type: string): boolean | undefined => {
+  if (type === "session.execution.started") return true
+  if (TERMINAL_EXECUTION_EVENTS.has(type)) return false
+  return undefined
+}
+
+// Content is uploaded at part boundaries, not for every delta. Execution
+// lifecycle events drive the live "running" state.
 const RELEVANT_EVENTS = new Set<string>([
   "session.idle",
-  "session.status",
+  ...EXECUTION_EVENTS,
   "session.deleted",
   "session.renamed",
   "session.metadata.updated",
@@ -62,12 +82,33 @@ const RELEVANT_EVENTS = new Set<string>([
   "session.revert.committed",
 ])
 
+const millis = (value: unknown) => {
+  if (typeof value === "number") return value
+  if (value instanceof Date) return value.getTime()
+  if (value && typeof value === "object") {
+    const record = value as { epochMillis?: unknown; epochMilliseconds?: unknown }
+    if (typeof record.epochMillis === "number") return record.epochMillis
+    if (typeof record.epochMilliseconds === "number") return record.epochMilliseconds
+  }
+  return undefined
+}
+
+// The same persisted state that backs the TUI's loading indicator: the
+// execution projector writes `time.busy` on session.execution.started and
+// `time.idle` on the terminal events.
+const persistedRunning = (info: unknown) => {
+  const time = (info as { time?: { busy?: unknown; idle?: unknown } } | undefined)?.time
+  const busy = millis(time?.busy)
+  if (busy === undefined) return undefined
+  return busy > (millis(time?.idle) ?? 0)
+}
+
 export default Plugin.define({
   id: "opencode-session-share",
   async setup(ctx) {
     const pluginOptions = ctx.options as PluginOptions
     const shares = new Map<string, ShareState>()
-    const runningSessions = new Map<string, boolean>()
+    const busySessions = new Map<string, boolean>()
     const controller = new AbortController()
 
     const configuredEndpoint = () => {
@@ -180,12 +221,7 @@ export default Plugin.define({
         (info as { location?: { directory?: string } }).location?.directory ??
         fallbackDirectory
       const messages = (await ctx.session.context({ sessionID })) as readonly any[]
-      const time = (info as { time?: { idle?: number; updated?: number } }).time
-      const derivedRunning =
-        typeof time?.idle === "number" && typeof time.updated === "number"
-          ? time.updated > time.idle
-          : undefined
-      const running = runningSessions.get(sessionID) ?? derivedRunning
+      const running = busySessions.get(sessionID) ?? persistedRunning(info)
       return {
         snapshot: normalizeSession(
           ctx.app,
@@ -210,7 +246,7 @@ export default Plugin.define({
       const key =
         state?.storageKey ?? shareKey(directory ?? ctx.location.directory, sessionID)
       stopState(sessionID)
-      runningSessions.delete(sessionID)
+      busySessions.delete(sessionID)
       try {
         await ctx.storage.remove(key)
       } catch (error) {
@@ -221,7 +257,7 @@ export default Plugin.define({
     const flush = async (sessionID: string) => {
       const state = shares.get(sessionID)
       if (!state) return
-      if (state.running) {
+      if (state.syncing) {
         state.dirty = true
         return
       }
@@ -229,7 +265,7 @@ export default Plugin.define({
         clearTimeout(state.timer)
         state.timer = undefined
       }
-      state.running = true
+      state.syncing = true
       state.dirty = false
       try {
         const { snapshot } = await readSnapshot(sessionID, state.directory)
@@ -256,7 +292,7 @@ export default Plugin.define({
           current.timer.unref?.()
         }
       } finally {
-        state.running = false
+        state.syncing = false
         if (state.dirty) {
           state.dirty = false
           void flush(sessionID)
@@ -292,7 +328,7 @@ export default Plugin.define({
         sessionID,
         storageKey,
         dirty: false,
-        running: false,
+        syncing: false,
         lastEventAt: previous?.lastEventAt,
       })
     }
@@ -309,7 +345,7 @@ export default Plugin.define({
       const directory = state?.directory ?? found?.directory ?? ctx.location.directory
       const key = state?.storageKey ?? found?.key ?? shareKey(directory, sessionID)
       stopState(sessionID)
-      runningSessions.delete(sessionID)
+      busySessions.delete(sessionID)
 
       try {
         const result = await revokeBySession(sessionID, pluginOptions)
@@ -336,7 +372,7 @@ export default Plugin.define({
             sessionID,
             storageKey: key,
             dirty: false,
-            running: false,
+            syncing: false,
           })
         }
         throw error
@@ -355,7 +391,7 @@ export default Plugin.define({
               sessionID,
               storageKey: found.key,
               dirty: false,
-              running: false,
+              syncing: false,
             })
           }
           // Existing share: answer from local storage immediately; verify in the
@@ -448,7 +484,7 @@ export default Plugin.define({
         // the full snapshot once now; this is a one-shot completion, not a
         // periodic background sync. Re-sync when the service supports the
         // running flag so the first snapshot can show live activity.
-        if (compacted !== snapshot || runningSessions.get(sessionID) === true) {
+        if (compacted !== snapshot || busySessions.get(sessionID) === true) {
           schedule(sessionID, true)
         }
 
@@ -478,12 +514,32 @@ export default Plugin.define({
           sessionID: item.sessionID,
           storageKey: item.key,
           dirty: false,
-          running: false,
+          syncing: false,
         })
       }
     }
 
     await loadShares()
+
+    // The plugin event stream is live-only, so a reload mid-turn never sees
+    // execution.started. Read the persisted busy marker instead of inferring
+    // the state from incomplete messages.
+    const hydrateRunning = async () => {
+      await Promise.all(
+        [...shares.keys()].map(async (sessionID) => {
+          const info = await ctx.session.get({ sessionID }).catch(() => undefined)
+          const running = persistedRunning(info)
+          if (running === true) {
+            busySessions.set(sessionID, true)
+            schedule(sessionID, true)
+          } else if (running === false) {
+            busySessions.delete(sessionID)
+          }
+        }),
+      )
+    }
+
+    await hydrateRunning()
 
     void (async () => {
       while (!controller.signal.aborted) {
@@ -498,27 +554,27 @@ export default Plugin.define({
                 : undefined)
             if (!sessionID) continue
 
-            if (event.type === "session.status") {
-              const status = (data?.status as { type?: string } | undefined)?.type
-              if (status === "busy" || status === "retry") {
-                runningSessions.set(sessionID, true)
-              } else if (status === "idle") {
-                runningSessions.set(sessionID, false)
-              }
+            const running = executionRunning(event.type)
+            if (running !== undefined) {
+              // Keep true entries for unshared sessions so a share created
+              // mid-turn inherits them; drop false entries so the map does not
+              // grow with every session that has ever run.
+              if (running || shares.has(sessionID)) busySessions.set(sessionID, running)
+              else busySessions.delete(sessionID)
+
               const state = shares.get(sessionID)
-              if (!state) continue
-              state.lastEventAt = Date.now()
-              schedule(sessionID)
+              if (state) {
+                state.lastEventAt = Date.now()
+                schedule(sessionID, true)
+              }
               continue
             }
 
             if (event.type === "session.deleted") {
-              runningSessions.delete(sessionID)
+              busySessions.delete(sessionID)
               if (shares.has(sessionID)) void unshare(sessionID).catch(() => {})
               continue
             }
-
-            if (event.type === "session.idle") runningSessions.set(sessionID, false)
 
             const state = shares.get(sessionID)
             if (!state) continue
@@ -530,6 +586,7 @@ export default Plugin.define({
         }
         if (controller.signal.aborted) break
         await new Promise((resolve) => setTimeout(resolve, 3000))
+        await hydrateRunning()
 
         // One-time catch-up after reconnect, only for shares that were active
         // shortly before the disconnect. Idle shares are never polled.
