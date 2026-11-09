@@ -184,4 +184,53 @@ describe("normalizeSession", () => {
     )
     expect(snapshot.messages).toHaveLength(0)
   })
+
+  test("hides the revert boundary and everything after it", () => {
+    const snapshot = normalizeSession(
+      { version: "2.1.4" },
+      { directory: "/tmp" },
+      {
+        id: "ses_revert",
+        time: { created: 1 },
+        revert: { messageID: "u2" },
+      },
+      [
+        { id: "u1", type: "user", time: { created: 2 }, text: "first" },
+        {
+          id: "a1",
+          type: "assistant",
+          time: { created: 3, completed: 4 },
+          content: [{ type: "text", text: "first answer" }],
+        },
+        { id: "u2", type: "user", time: { created: 5 }, text: "second" },
+        {
+          id: "a2",
+          type: "assistant",
+          time: { created: 6, completed: 7 },
+          content: [{ type: "text", text: "second answer" }],
+        },
+      ] as any,
+    )
+
+    expect(snapshot.messages.map((message) => message.role)).toEqual(["user", "assistant"])
+    expect(snapshot.messages[0]).toMatchObject({ role: "user", text: "first" })
+    expect(snapshot.session.reverted).toBe(true)
+  })
+
+  test("keeps all messages when the revert boundary is not in context", () => {
+    const snapshot = normalizeSession(
+      { version: "2.1.4" },
+      { directory: "/tmp" },
+      {
+        id: "ses_revert_missing",
+        time: { created: 1 },
+        revert: { messageID: "u_missing" },
+      },
+      [{ id: "u1", type: "user", time: { created: 2 }, text: "first" }] as any,
+    )
+
+    expect(snapshot.messages).toHaveLength(1)
+    expect(snapshot.messages[0]).toMatchObject({ role: "user", text: "first" })
+    expect(snapshot.session.reverted).toBeUndefined()
+  })
 })

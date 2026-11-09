@@ -172,4 +172,25 @@ describe("session-share plugin", () => {
       globalThis.fetch = originalFetch
     }
   })
+
+  test("syncs after a staged revert event", async () => {
+    originalFetch = globalThis.fetch
+    const events: TestEvent[] = []
+    const ctx = makeContext({ shareID: "share_3", sessionID: "ses_3", events })
+    const fetches = mockFetch()
+
+    const cleanup = (await plugin.setup(ctx as any)) as () => Promise<void>
+    try {
+      await sleep(150)
+      events.push({
+        type: "session.revert.staged",
+        data: { sessionID: "ses_3", revert: { messageID: "u1" } },
+      })
+      await sleep(1200)
+      expect(fetches.some((url) => url.includes("/api/shares/share_3/sync"))).toBe(true)
+    } finally {
+      await cleanup()
+      globalThis.fetch = originalFetch
+    }
+  })
 })

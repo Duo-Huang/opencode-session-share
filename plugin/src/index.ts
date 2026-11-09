@@ -79,6 +79,8 @@ const RELEVANT_EVENTS = new Set<string>([
   "session.step.ended",
   "session.step.failed",
   "session.compaction.ended",
+  "session.revert.staged",
+  "session.revert.cleared",
   "session.revert.committed",
 ])
 

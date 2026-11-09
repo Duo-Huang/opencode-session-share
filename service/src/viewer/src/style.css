@@ -79,116 +79,237 @@ body {
   background: color-mix(in srgb, var(--ink) 18%, transparent);
 }
 
-.session-meta {
-  padding: 0.8rem 0.9rem;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--page-soft) 72%, transparent);
-}
-
-.meta-grid {
+.session-card {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 0.7rem 1rem;
+  grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--page-soft) 82%, transparent),
+      color-mix(in srgb, var(--page-soft) 58%, transparent)
+    );
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.04);
 }
 
-.meta-grid-primary {
-  grid-template-columns: minmax(0, 2.2fr) minmax(0, 1fr) minmax(0, 1fr);
+.dark .session-card {
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.22);
 }
 
-.meta-model .meta-value {
+.session-identity {
+  min-width: 0;
+  padding: 16px 18px;
+}
+
+.eyebrow,
+.stat-label,
+.footer-fact > span {
+  display: block;
+  color: var(--ink-muted);
+  font-size: 9.5px;
+  line-height: 1.4;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.model {
+  margin: 5px 0 12px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.45;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.meta-chips {
+.identity-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
-  margin-top: 0.75rem;
-  padding-top: 0.7rem;
-  border-top: 1px solid var(--line);
+  gap: 6px;
 }
 
-.meta-chip {
+.pill {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  max-width: 100%;
-  padding: 0.16rem 0.5rem;
-  overflow: hidden;
+  gap: 5px;
+  min-width: 0;
+  padding: 3px 8px;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--page);
   color: var(--ink-soft);
   font-size: 10.5px;
-  line-height: 1.5;
-  text-overflow: ellipsis;
+  line-height: 1.4;
   white-space: nowrap;
 }
 
-.meta-chip-label {
+.pill > span {
   color: var(--ink-muted);
   font-size: 9px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
-@media (max-width: 640px) {
-  .meta-grid-primary {
-    grid-template-columns: minmax(0, 1fr);
+.stat-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: center;
+  gap: 14px 18px;
+  padding: 16px 18px;
+  border-left: 1px solid var(--line);
+  background: color-mix(in srgb, var(--page) 52%, transparent);
+}
+
+.stat {
+  min-width: 0;
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
+}
+
+.stat:first-child,
+.stat:nth-child(3) {
+  border-left: 0;
+  padding-left: 0;
+}
+
+.stat-value {
+  display: block;
+  margin-top: 3px;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 720px) {
+  .session-card {
+    grid-template-columns: 1fr;
+  }
+
+  .stat-strip {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .stat:nth-child(2),
+  .stat:nth-child(4) {
+    border-left: 1px solid var(--line);
   }
 }
 
-.meta-item {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  min-width: 0;
-}
-
-.meta-label {
-  color: var(--ink-muted);
-  font-size: 9.5px;
-  letter-spacing: 0.14em;
-  line-height: 1.4;
-  text-transform: uppercase;
-}
-
-.meta-value {
-  color: var(--ink-soft);
-  font-size: 12px;
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-}
-
 .share-footer {
-  margin-top: 2.5rem;
-  padding-top: 1.25rem;
+  margin-top: 30px;
+  padding-top: 16px;
   border-top: 1px solid var(--line);
 }
 
-.footer-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 1rem;
+.footer-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px 28px;
+}
+
+.footer-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 26px;
+  min-width: 0;
+}
+
+.footer-fact {
+  min-width: 0;
+}
+
+.footer-fact > strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink-soft);
+  font-size: 11.5px;
+  font-weight: 450;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.footer-visibility {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 27px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--page-soft);
+  color: var(--ink-muted);
+  font-size: 10.5px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.footer-visibility svg {
+  width: 12px;
+  height: 12px;
+}
+
+.footer-visibility .dot {
+  color: var(--line-strong);
 }
 
 .footer-notes {
   display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  margin-top: 1.1rem;
-  padding-top: 0.9rem;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 24px;
+  margin-top: 14px;
+  padding-top: 12px;
   border-top: 1px solid var(--line);
   color: var(--ink-muted);
-  font-size: 11px;
-  line-height: 1.7;
+  font-size: 10.5px;
+  line-height: 1.65;
+}
+
+.footer-note-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-width: 62ch;
 }
 
 .footer-notes p {
   margin: 0;
+}
+
+.note-source {
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .footer-meta {
+    align-items: flex-start;
+  }
+
+  .footer-facts {
+    gap: 10px 20px;
+  }
+
+  .footer-notes {
+    display: block;
+  }
+
+  .note-source {
+    margin-top: 6px;
+  }
 }
 
 .repo-link {
@@ -216,16 +337,6 @@ body {
 
 .dark .footer-warning {
   color: #fbbf24;
-}
-
-.footer-note {
-  align-self: flex-start;
-  padding: 0.12rem 0.5rem;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  color: var(--ink-muted);
-  font-size: 10px;
-  line-height: 1.5;
 }
 
 .timeline {
@@ -633,6 +744,18 @@ body {
 .assistant-text:not([data-expanded]) .prose-share {
   max-height: 50em;
   overflow: hidden;
+}
+
+/* A short fade only at the clipped edge. We intentionally do not blur the
+   content: tables and code blocks should stay crisp until the last line. */
+.assistant-text[data-overflow]:not([data-expanded]) .prose-share {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    #000 0%,
+    #000 calc(100% - 3.5rem),
+    transparent 100%
+  );
+  mask-image: linear-gradient(to bottom, #000 0%, #000 calc(100% - 3.5rem), transparent 100%);
 }
 
 .text-toggle {

@@ -10,6 +10,17 @@ import type {
 } from "../../../../shared/types"
 import { highlightCode, languageFromFile, renderMarkdown } from "./markdown"
 import { applyTheme, loadThemeMode, storeThemeMode, type ThemeMode } from "./theme"
+import { captureAnchor, restoreAnchorInDom, type ViewAnchor } from "./view-anchor"
+import {
+  DEFAULT_VIEW_MAX_BYTES,
+  LOADED_BYTES_MULTIPLIER,
+  MIN_LOADED_BYTES,
+  mergeLoadedRanges,
+  planLiveChange,
+  trimLoadedRanges,
+  trimToTotal,
+  type LoadedRange,
+} from "./view-state"
 
 export type PublicShare = ShareSnapshot & {
   id: string
@@ -27,17 +38,6 @@ export type PublicShare = ShareSnapshot & {
     cost: number
     tokens: { input: number; output: number; reasoning: number }
   }
-}
-
-export type LoadedRange = {
-  /** First message index in this loaded chunk, inclusive. */
-  start: number
-  /** Last message index in this loaded chunk, exclusive. */
-  end: number
-  /** Uncompressed JSON bytes of the messages in this chunk. */
-  bytes: number
-  /** Last time this chunk was used, for the bounded range cache. */
-  touchedAt: number
 }
 
 export type ShareView = Omit<PublicShare, "messages" | "page"> & {
@@ -75,13 +75,6 @@ type Status = "loading" | "live" | "reconnecting" | "revoked" | "error"
 const REPO_URL = "https://github.com/Duo-Huang/opencode-session-share"
 const reconnectDelays = [1000, 2000, 5000, 10000, 30000]
 
-// Keep the sparse document bounded without giving up the initial window.
-const MAX_LOADED_RANGES = 4
-// The viewer cache is derived from the server's page budget. Four pages is
-// enough to keep the initial window, the live tail, and the jump target.
-const DEFAULT_VIEW_MAX_BYTES = 128 * 1024
-const LOADED_BYTES_MULTIPLIER = 4
-const MIN_LOADED_BYTES = 512 * 1024
 // Page-count policy for gap loading, not a byte limit. Increase only if the
 // server page budget is small; very large pages should stay at 1-2.
 const AUTO_FILL_MAX_PAGES = 2
@@ -432,56 +425,6 @@ function toShareView(data: PublicShare): ShareView {
   }
 }
 
-function mergeLoadedRanges(ranges: LoadedRange[]): LoadedRange[] {
-  const sorted = [...ranges].sort((left, right) => left.start - right.start)
-  const merged: LoadedRange[] = []
-  for (const range of sorted) {
-    const last = merged.at(-1)
-    if (last && range.start <= last.end) {
-      last.end = Math.max(last.end, range.end)
-      last.bytes += range.bytes
-      last.touchedAt = Math.max(last.touchedAt, range.touchedAt)
-      continue
-    }
-    merged.push({ ...range })
-  }
-  return merged
-}
-
-function trimLoadedRanges(
-  ranges: LoadedRange[],
-  messages: Map<number, ShareMessage>,
-  focusIndex: number,
-  total: number,
-  maxBytes: number,
-): LoadedRange[] {
-  const pinned = new Set<LoadedRange>()
-  for (const range of ranges) {
-    if (range.start === 0) pinned.add(range)
-    if (range.end === total) pinned.add(range)
-    if (focusIndex >= range.start && focusIndex < range.end) {
-      range.touchedAt = Date.now()
-      pinned.add(range)
-    }
-  }
-  const candidates = ranges
-    .filter((range) => !pinned.has(range))
-    .sort((left, right) => left.touchedAt - right.touchedAt)
-  let bytes = ranges.reduce((sum, range) => sum + range.bytes, 0)
-  while (ranges.length > MAX_LOADED_RANGES || bytes > maxBytes) {
-    const victim = candidates.shift()
-    if (!victim) break
-    const index = ranges.indexOf(victim)
-    if (index === -1) continue
-    ranges.splice(index, 1)
-    for (let messageIndex = victim.start; messageIndex < victim.end; messageIndex++) {
-      messages.delete(messageIndex)
-    }
-    bytes -= victim.bytes
-  }
-  return ranges
-}
-
 function buildAssistantBlocks(entries: AssistantEntry[]): AssistantBlock[] {
   const blocks: AssistantBlock[] = []
   let activity: AssistantActivityPart[] = []
@@ -588,6 +531,7 @@ export function App() {
   const [loadingTail, setLoadingTail] = createSignal(false)
   const [newMessages, setNewMessages] = createSignal(false)
   const [pendingTarget, setPendingTarget] = createSignal("")
+  const [pendingAnchor, setPendingAnchor] = createSignal<ViewAnchor | undefined>()
   const [searchQuery, setSearchQuery] = createSignal("")
   const [searchResults, setSearchResults] = createSignal<SearchResult[]>([])
   const [searching, setSearching] = createSignal(false)
@@ -658,13 +602,38 @@ export function App() {
       return
     }
     if (data.updatedAt <= current.updatedAt) return
-    // A compaction or rewritten active context invalidates message indices.
-    if (data.page.total < current.total) {
+
+    const { messages: _messages, page: _page, ...meta } = data
+    const plan = planLiveChange(current, {
+      total: data.page.total,
+      reverted: data.session.reverted,
+    })
+
+    if (plan.kind === "trim") {
+      const anchor = captureAnchor(activeDirectoryId())
+      const trimmed = trimToTotal(current.messages, current.ranges, data.page.total)
+      ++pageRequest
+      setLoadingPage(false)
+      setLoadingTail(false)
+      setShare({
+        ...current,
+        ...meta,
+        messages: trimmed.messages,
+        ranges: trimmed.ranges,
+        total: data.page.total,
+      })
+      setNewMessages(false)
+      setPendingAnchor(anchor)
+      return
+    }
+
+    if (plan.kind === "reset") {
+      const anchor = captureAnchor(activeDirectoryId())
       ++pageRequest
       setLoadingPage(false)
       setLoadingTail(false)
       setShare(toShareView(data))
-      setNewMessages(false)
+      setPendingAnchor(anchor)
       return
     }
 
@@ -678,7 +647,6 @@ export function App() {
       return
     }
 
-    const { messages: _messages, page: _page, ...meta } = data
     setShare({
       ...current,
       ...meta,
@@ -686,7 +654,7 @@ export function App() {
       ranges: current.ranges,
       total: data.page.total,
     })
-    if (data.page.total > current.total) setNewMessages(true)
+    if (plan.kind === "append") setNewMessages(true)
   }
 
   const fetchPage = async (
@@ -744,7 +712,7 @@ export function App() {
         limits: data.limits ?? current.limits,
         messages,
         ranges,
-        total: data.page.total,
+        total: Math.max(current.total, data.page.total, data.page.end),
         privacy: data.privacy ?? current.privacy,
         updatedAt: Math.max(current.updatedAt, data.updatedAt),
       }
@@ -974,18 +942,7 @@ export function App() {
     }
     if (data.updatedAt <= current.updatedAt) return
 
-    if (data.total < current.total) {
-      // Compaction or a rewritten active context invalidates message indices.
-      ++pageRequest
-      setLoadingPage(false)
-      setLoadingTail(false)
-      setShare(null)
-      void refresh(true)
-      return
-    }
-
-    setShare({
-      ...current,
+    const metadata = {
       id: data.id,
       updatedAt: data.updatedAt,
       expiresAt: data.expiresAt,
@@ -996,10 +953,44 @@ export function App() {
       stats: data.stats,
       index: data.index,
       privacy: data.privacy,
+    }
+    const plan = planLiveChange(current, {
       total: data.total,
+      reverted: data.session.reverted,
     })
 
-    if (data.total > current.total) {
+    if (plan.kind === "trim") {
+      const anchor = captureAnchor(activeDirectoryId())
+      const trimmed = trimToTotal(current.messages, current.ranges, data.total)
+      ++pageRequest
+      setLoadingPage(false)
+      setLoadingTail(false)
+      setShare({
+        ...current,
+        ...metadata,
+        messages: trimmed.messages,
+        ranges: trimmed.ranges,
+        total: data.total,
+      })
+      setNewMessages(false)
+      setPendingAnchor(anchor)
+      return
+    }
+
+    if (plan.kind === "reset") {
+      const anchor = captureAnchor(activeDirectoryId())
+      ++pageRequest
+      setLoadingPage(false)
+      setLoadingTail(false)
+      setShare(null)
+      setPendingAnchor(anchor)
+      void refresh(true)
+      return
+    }
+
+    setShare({ ...current, ...metadata, total: data.total })
+
+    if (plan.kind === "append") {
       setNewMessages(true)
       const atBottom =
         window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 240
@@ -1447,6 +1438,24 @@ export function App() {
   })
 
   createEffect(() => {
+    const anchor = pendingAnchor()
+    const current = share()
+    if (!anchor || !current || loadingPage()) return
+    setPendingAnchor(undefined)
+    queueMicrotask(() => {
+      requestAnimationFrame(() => {
+        if (anchor.index >= current.total) {
+          if (hasAfter(current)) void loadTail()
+          else window.scrollTo({ top: document.body.scrollHeight, behavior: "auto" })
+          return
+        }
+        if (restoreAnchorInDom(anchor)) return
+        void jumpToTarget(anchor.id, anchor.index)
+      })
+    })
+  })
+
+  createEffect(() => {
     const current = share()
     if (!current || loadingPage() || !hasAfter(current)) return
     void current.ranges.length
@@ -1526,7 +1535,7 @@ export function App() {
         <span class="live-dot" />
         <span>{liveState()}</span>
       </div>
-      <header class="mb-8 border-b border-[var(--line)] pb-6">
+      <header class="mb-7">
         <div class="mb-4 flex items-center gap-3">
           <div class="flex items-center gap-2 text-[11px] uppercase tracking-[0.16em] text-[var(--ink-muted)]">
             <span class="inline-block h-1.5 w-1.5 rounded-full bg-[var(--ink)]" />
@@ -1567,52 +1576,46 @@ export function App() {
               <h1 class="mb-4 line-clamp-3 text-3xl font-medium leading-tight tracking-[-0.045em] sm:text-4xl">
                 {current().title}
               </h1>
-              <div class="session-meta">
-                <div class="meta-grid meta-grid-primary">
+              <div class="session-card">
+                <div class="session-identity">
                   <Show when={models().length > 0}>
-                    <div class="meta-item meta-model">
-                      <span class="meta-label">Model</span>
-                      <span class="meta-value" title={models().join(" · ")}>
-                        {models().join(" · ")}
+                    <span class="eyebrow">Model</span>
+                    <div class="model" title={models().join(" · ")}>
+                      {models().join(" · ")}
+                    </div>
+                  </Show>
+                  <div class="identity-chips">
+                    <Show when={current().session.agent}>
+                      <span class="pill">
+                        <span>Agent</span>
+                        {current().session.agent}
                       </span>
-                    </div>
-                  </Show>
-                  <Show when={current().session.agent}>
-                    <div class="meta-item">
-                      <span class="meta-label">Agent</span>
-                      <span class="meta-value">{current().session.agent}</span>
-                    </div>
-                  </Show>
-                  <div class="meta-item">
-                    <span class="meta-label">Version</span>
-                    <span class="meta-value">OpenCode {current().source.version}</span>
+                    </Show>
+                    <span class="pill">
+                      <span>Version</span>
+                      OpenCode {current().source.version}
+                    </span>
                   </div>
                 </div>
-                <div class="meta-chips">
-                  <span class="meta-chip">
-                    <span class="meta-chip-label">Messages</span>
-                    {stats().messages}
-                  </span>
-                  <span class="meta-chip">
-                    <span class="meta-chip-label">Tools</span>
-                    {stats().tools}
-                  </span>
-                  <span class="meta-chip">
-                    <span class="meta-chip-label">Tokens</span>
-                    {formatNumber(stats().tokens.input + stats().tokens.output)}
-                  </span>
-                  <span class="meta-chip">
-                    <span class="meta-chip-label">Cost</span>
-                    {formatCost(stats().cost)}
-                  </span>
-                  <span class="meta-chip">
-                    <span class="meta-chip-label">Created</span>
-                    {formatDate(current().createdAt)}
-                  </span>
-                  <span class="meta-chip">
-                    <span class="meta-chip-label">Expires</span>
-                    {formatDate(current().expiresAt)}
-                  </span>
+                <div class="stat-strip">
+                  <div class="stat">
+                    <span class="stat-label">Messages</span>
+                    <span class="stat-value">{stats().messages}</span>
+                  </div>
+                  <div class="stat">
+                    <span class="stat-label">Tools</span>
+                    <span class="stat-value">{stats().tools}</span>
+                  </div>
+                  <div class="stat">
+                    <span class="stat-label">Tokens</span>
+                    <span class="stat-value">
+                      {formatNumber(stats().tokens.input + stats().tokens.output)}
+                    </span>
+                  </div>
+                  <div class="stat">
+                    <span class="stat-label">Cost</span>
+                    <span class="stat-value">{formatCost(stats().cost)}</span>
+                  </div>
                 </div>
               </div>
             </>
@@ -1754,44 +1757,42 @@ export function App() {
 
       <Show when={share() && status() !== "revoked" && status() !== "error"}>
         <footer class="share-footer">
-          <div class="footer-grid">
-            <div class="meta-item">
-              <span class="meta-label">Snapshot</span>
-              <span class="meta-value">Read-only</span>
+          <div class="footer-meta">
+            <div class="footer-facts">
+              <div class="footer-fact">
+                <span>Created</span>
+                <strong>{formatDate(share()!.createdAt)}</strong>
+              </div>
+              <div class="footer-fact">
+                <span>Updated</span>
+                <strong>{formatDate(share()!.updatedAt)}</strong>
+              </div>
+              <div class="footer-fact">
+                <span>Expires</span>
+                <strong>{formatDate(share()!.expiresAt)}</strong>
+              </div>
             </div>
-            <div class="meta-item">
-              <span class="meta-label">Updated</span>
-              <span class="meta-value">{formatDate(share()!.updatedAt)}</span>
-            </div>
-            <div class="meta-item">
-              <span class="meta-label">Expires</span>
-              <span class="meta-value">{formatDate(share()!.expiresAt)}</span>
-            </div>
-            <div class="meta-item">
-              <span class="meta-label">Visibility</span>
-              <span class="meta-value">Anyone with link</span>
+            <div class="footer-visibility">
+              <LockIcon />
+              Read-only
+              <span class="dot">·</span>
+              Anyone with link
             </div>
           </div>
           <div class="footer-notes">
-            <p>
-              This page uses OpenCode&apos;s active context. Earlier history is represented by the
-              compaction summary.
-            </p>
-            <Show when={bodyTruncated()}>
-              <span class="footer-warning">Some message text could not be included</span>
-            </Show>
-            <Show when={detailsOmitted()}>
-              <span class="footer-note">Tool and thinking details load on demand</span>
-            </Show>
-            <p>Shared with OpenCode. Anyone with the link can view this snapshot.</p>
-            <p class="footer-source">
+            <div class="footer-note-copy">
+              <p>
+                This page uses OpenCode&apos;s active context. Earlier history is represented by the
+                compaction summary.
+                <Show when={detailsOmitted()}> Tool and thinking details load on demand.</Show>
+              </p>
+              <Show when={bodyTruncated()}>
+                <span class="footer-warning">Some message text could not be included</span>
+              </Show>
+            </div>
+            <p class="note-source">
               Open source on{" "}
-              <a
-                class="repo-link"
-                href={REPO_URL}
-                target="_blank"
-                rel="noreferrer noopener"
-              >
+              <a class="repo-link" href={REPO_URL} target="_blank" rel="noreferrer noopener">
                 GitHub
               </a>
               .
@@ -2324,7 +2325,12 @@ function TextPart(props: { id: string; text: string; expand?: boolean; shareId: 
   }
 
   return (
-    <div class="assistant-text" id={props.id} data-expanded={expanded() ? true : undefined}>
+    <div
+      class="assistant-text"
+      id={props.id}
+      data-expanded={expanded() ? true : undefined}
+      data-overflow={overflow() ? true : undefined}
+    >
       <div ref={ref} class="prose-share" innerHTML={renderMarkdown(props.text)} />
       <Show when={overflow() || expanded()}>
         <button

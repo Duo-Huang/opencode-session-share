@@ -116,6 +116,8 @@ export type ShareSession = {
   model?: ModelRef
   /** True while the agent is still producing this turn. */
   running?: boolean
+  /** True while the TUI has a staged revert boundary. */
+  reverted?: boolean
 }
 
 export type ShareSnapshot = {

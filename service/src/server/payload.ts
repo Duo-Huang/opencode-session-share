@@ -118,6 +118,7 @@ export const ShareSnapshotSchema = z
         agent: z.string().max(200).optional(),
         model: ModelRef.optional(),
         running: z.boolean().optional(),
+        reverted: z.boolean().optional(),
       })
       .strict(),
     privacy: z

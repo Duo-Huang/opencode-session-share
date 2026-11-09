@@ -96,7 +96,17 @@ export function normalizeSession(
   const dropped = new Set<string>(["system", "skill", "synthetic", "native", "snapshots"])
   const output: ShareMessage[] = []
 
-  for (const message of messages) {
+  // Match the TUI's messagesBeforeRevert(): a staged revert hides the
+  // boundary message and everything after it until redo/commit.
+  const revertMessageID =
+    typeof info.revert?.messageID === "string" ? info.revert.messageID : undefined
+  const revertIndex =
+    revertMessageID === undefined
+      ? -1
+      : messages.findIndex((message: any) => message.id === revertMessageID)
+  const visibleMessages = revertIndex >= 0 ? messages.slice(0, revertIndex) : messages
+
+  for (const message of visibleMessages) {
     if (message.type === "user") {
       output.push({
         role: "user",
@@ -203,6 +213,7 @@ export function normalizeSession(
       agent: info.agent,
       model: info.model,
       ...(running !== undefined ? { running } : {}),
+      ...(revertIndex >= 0 ? { reverted: true } : {}),
     },
     privacy: {
       dropped: [...dropped],
