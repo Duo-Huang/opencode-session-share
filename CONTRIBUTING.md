@@ -85,6 +85,11 @@ Releases are maintainer-only. Use the smallest release that matches the change:
 A viewer/service change still ships a new image. Your own deployment pulls the
 same GHCR artifact as self-hosters.
 
+A `service-vX.Y.Z` tag is invalid if any non-test file under `plugin/src/` or
+`plugin/package.json` changed since the previous release tag. Use a full
+`vX.Y.Z` release instead. The release workflow checks this before building or
+publishing.
+
 Full release:
 
 ```bash

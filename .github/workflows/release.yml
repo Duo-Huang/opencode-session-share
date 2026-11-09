@@ -14,7 +14,38 @@ permissions:
   id-token: write
 
 jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Guard service-only release
+        if: startsWith(github.ref_name, 'service-')
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! previous="$(git describe --tags --abbrev=0 "$GITHUB_REF_NAME^" 2>/dev/null)"; then
+            echo "::error::cannot determine the previous release tag"
+            exit 1
+          fi
+
+          changed="$(
+            git diff --name-only "$previous".."$GITHUB_REF_NAME" -- plugin/src plugin/package.json \
+              | grep -v '\.test\.ts$' || true
+          )"
+
+          if [ -n "$changed" ]; then
+            echo "::error::plugin runtime changed since $previous; use a full vX.Y.Z release"
+            printf '%s\n' "$changed"
+            exit 1
+          fi
+
   image:
+    needs: guard
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -57,6 +88,7 @@ jobs:
             -f visibility=public || true
 
   npm:
+    needs: guard
     # service-v* releases only publish the image.
     if: ${{ !startsWith(github.ref_name, 'service-') }}
     runs-on: ubuntu-latest
