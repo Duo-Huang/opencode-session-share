@@ -25,6 +25,14 @@ export function hasAfter(view: ShareView) {
   return (view.ranges.at(-1)?.end ?? 0) < view.total
 }
 
+/** True when at least one adjacent pair of loaded ranges has a gap. */
+export function hasUnloadedGaps(view: ShareView) {
+  return view.ranges.some((range, index) => {
+    const previous = view.ranges[index - 1]
+    return previous !== undefined && previous.end < range.start
+  })
+}
+
 export function modelLabels(view: ShareView) {
   const models = new Set<string>()
   if (view.session.model) models.add(`${view.session.model.providerID}/${view.session.model.id}`)

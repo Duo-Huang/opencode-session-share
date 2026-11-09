@@ -18,9 +18,28 @@ import {
   reconnectDelays,
 } from "../lib/constants"
 import { formatDuration } from "../lib/format"
-import { hasAfter, hasBefore, modelLabels, toShareView } from "../lib/share-view"
+import {
+  hasAfter,
+  hasBefore,
+  hasUnloadedGaps,
+  modelLabels,
+  toShareView,
+} from "../lib/share-view"
 import { buildDisplayTurns } from "../lib/turns"
 import type { LiveUpdate, PageData, PublicShare, ShareView, Status } from "../lib/types"
+
+type PageCursor = { start?: number; before?: number; around?: number }
+
+type JumpDestination = { kind: "top" } | { kind: "bottom" } | { kind: "element"; id: string }
+
+type JumpPlan = {
+  /** Null when the destination page is already loaded. */
+  cursor: PageCursor | null
+  /** Message index whose surrounding page range should be filled. */
+  targetIndex: number
+  destination: JumpDestination
+  onLoaded?: () => void
+}
 
 export function useShare(id: string, options: { getAnchorId: () => string }) {
   const [view, setView] = createSignal<ShareView | null>(null)
@@ -34,7 +53,6 @@ export function useShare(id: string, options: { getAnchorId: () => string }) {
   const [newMessages, setNewMessages] = createSignal(false)
   const [scrollTick, setScrollTick] = createSignal(0)
   const [scrollDirection, setScrollDirection] = createSignal<"up" | "down">("down")
-  const [pendingTarget, setPendingTarget] = createSignal("")
   const [pendingAnchor, setPendingAnchor] = createSignal<ViewAnchor | undefined>()
 
   let pageRequest = 0
@@ -115,10 +133,7 @@ export function useShare(id: string, options: { getAnchorId: () => string }) {
     if (plan.kind === "append") setNewMessages(true)
   }
 
-  const fetchPage = async (
-    cursor: { start?: number; before?: number; around?: number },
-    signal?: AbortSignal,
-  ): Promise<PageData> => {
+  const fetchPage = async (cursor: PageCursor, signal?: AbortSignal): Promise<PageData> => {
     const query = new URLSearchParams()
     if (cursor.start !== undefined) query.set("start", String(cursor.start))
     if (cursor.before !== undefined) query.set("before", String(cursor.before))
@@ -204,6 +219,57 @@ export function useShare(id: string, options: { getAnchorId: () => string }) {
       const data = await fetchPage({ start: updatedTarget.end })
       if (request !== pageRequest) return
       insertPage(data, true)
+    }
+  }
+
+  const navigationBehavior = (current: ShareView | null): ScrollBehavior =>
+    current && hasUnloadedGaps(current) ? "auto" : "smooth"
+
+  const applyDestination = (destination: JumpDestination, behavior: ScrollBehavior) => {
+    if (destination.kind === "top") {
+      window.scrollTo({ top: 0, behavior })
+      return
+    }
+    if (destination.kind === "bottom") {
+      window.scrollTo({ top: document.documentElement.scrollHeight, behavior })
+      return
+    }
+    document.getElementById(destination.id)?.scrollIntoView({ behavior, block: "start" })
+  }
+
+  const scrollDestination = (destination: JumpDestination) => {
+    queueMicrotask(() => {
+      requestAnimationFrame(() => {
+        applyDestination(destination, navigationBehavior(view()))
+      })
+    })
+  }
+
+  /**
+   * Shared flow for every jump: load the destination page when needed, fill one
+   * page around it, then scroll once. Manual scrolling deliberately does not use
+   * this path because it must preserve the current viewport while appending.
+   */
+  const runJump = async (plan: JumpPlan) => {
+    const current = view()
+    if (!current || loadingPage()) return
+
+    const request = ++pageRequest
+    setLoadingPage(true)
+    try {
+      if (plan.cursor) {
+        const data = await fetchPage(plan.cursor)
+        if (request !== pageRequest) return
+        insertPage(data, true)
+        await fillAdjacentGaps(request, plan.targetIndex)
+        if (request !== pageRequest) return
+        plan.onLoaded?.()
+      }
+      scrollDestination(plan.destination)
+    } catch {
+      // Keep the current view when a jump fails.
+    } finally {
+      if (request === pageRequest) setLoadingPage(false)
     }
   }
 
@@ -307,24 +373,22 @@ export function useShare(id: string, options: { getAnchorId: () => string }) {
 
   const loadTail = async () => {
     const current = view()
-    if (!current || loadingPage()) return
-    const request = ++pageRequest
-    setLoadingPage(true)
+    if (!current) return
+    if (!hasAfter(current)) {
+      scrollDestination({ kind: "bottom" })
+      return
+    }
+    if (loadingPage()) return
+
     setLoadingTail(true)
     try {
-      const data = await fetchPage({ before: current.total })
-      if (request !== pageRequest) return
-      insertPage(data, true)
-      setNewMessages(false)
-      queueMicrotask(() => {
-        requestAnimationFrame(() => {
-          window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" })
-        })
+      await runJump({
+        cursor: { before: current.total },
+        targetIndex: Math.max(0, current.total - 1),
+        destination: { kind: "bottom" },
+        onLoaded: () => setNewMessages(false),
       })
-    } catch {
-      // Keep the current window.
     } finally {
-      if (request === pageRequest) setLoadingPage(false)
       setLoadingTail(false)
     }
   }
@@ -333,58 +397,35 @@ export function useShare(id: string, options: { getAnchorId: () => string }) {
     const current = view()
     if (!current || loadingPage()) return
     if (!hasBefore(current)) {
-      window.scrollTo({ top: 0, behavior: "smooth" })
+      scrollDestination({ kind: "top" })
       return
     }
-    const request = ++pageRequest
-    setLoadingPage(true)
-    try {
-      const data = await fetchPage({ start: 0 })
-      if (request !== pageRequest) return
-      insertPage(data, true)
-      queueMicrotask(() => {
-        requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }))
-      })
-    } catch {
-      // Keep the current window.
-    } finally {
-      if (request === pageRequest) setLoadingPage(false)
-    }
+    await runJump({
+      cursor: { start: 0 },
+      targetIndex: 0,
+      destination: { kind: "top" },
+    })
   }
 
   const goToBottom = () => {
-    const current = view()
-    if (current && hasAfter(current)) {
-      void loadTail()
-      return
-    }
-    window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" })
+    void loadTail()
   }
 
   const jumpToTarget = async (target: string, messageIndex: number) => {
     const existing = document.getElementById(target)
     if (existing) {
-      existing.scrollIntoView({ behavior: "smooth", block: "start" })
+      scrollDestination({ kind: "element", id: target })
       return
     }
     const current = view()
     if (!current || loadingPage()) return
     const targetIndex = /^[mp]-(\d+)/.exec(target)?.[1]
     const around = targetIndex === undefined ? messageIndex : Number(targetIndex)
-    const request = ++pageRequest
-    setLoadingPage(true)
-    try {
-      const data = await fetchPage({ around })
-      if (request !== pageRequest) return
-      insertPage(data, true)
-      await fillAdjacentGaps(request, Math.max(0, Math.min(around, data.page.total - 1)))
-      if (request !== pageRequest) return
-      setPendingTarget(target)
-    } catch {
-      // Leave the loaded ranges in place.
-    } finally {
-      if (request === pageRequest) setLoadingPage(false)
-    }
+    await runJump({
+      cursor: { around },
+      targetIndex: Math.max(0, Math.min(around, current.total - 1)),
+      destination: { kind: "element", id: target },
+    })
   }
 
   const applyLiveUpdate = (data: LiveUpdate) => {
@@ -775,22 +816,6 @@ export function useShare(id: string, options: { getAnchorId: () => string }) {
   })
 
   createEffect(() => {
-    const target = pendingTarget()
-    if (!target) return
-    const current = view()
-    if (!current) return
-    void current.messages.size
-    void current.ranges.length
-    void current.total
-    queueMicrotask(() => {
-      const element = document.getElementById(target)
-      if (!element) return
-      element.scrollIntoView({ behavior: "smooth", block: "start" })
-      setPendingTarget("")
-    })
-  })
-
-  createEffect(() => {
     const anchor = pendingAnchor()
     const current = view()
     if (!anchor || !current || loadingPage()) return
@@ -799,7 +824,7 @@ export function useShare(id: string, options: { getAnchorId: () => string }) {
       requestAnimationFrame(() => {
         if (anchor.index >= current.total) {
           if (hasAfter(current)) void loadTail()
-          else window.scrollTo({ top: document.body.scrollHeight, behavior: "auto" })
+          else applyDestination({ kind: "bottom" }, "auto")
           return
         }
         if (restoreAnchorInDom(anchor)) return
