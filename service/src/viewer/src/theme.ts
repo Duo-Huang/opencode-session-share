@@ -1,6 +1,8 @@
 export type ThemeMode = "light" | "dark" | "system"
 
 const STORAGE_KEY = "oc-share-theme"
+// Long enough to cover the browser's next paint with transitions disabled.
+const THEME_SWITCH_MS = 120
 
 export function normalizeThemeMode(value: string | null | undefined): ThemeMode {
   if (value === "light" || value === "dark" || value === "system") return value
@@ -28,9 +30,32 @@ export function storeThemeMode(mode: ThemeMode) {
   }
 }
 
+const transitionTimers = new WeakMap<HTMLElement, number>()
+
 export function applyTheme(mode: ThemeMode, root: HTMLElement = document.documentElement) {
-  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches
+  const win = root.ownerDocument?.defaultView
+  const prefersDark = win?.matchMedia("(prefers-color-scheme: dark)").matches ?? false
   const resolved = resolveTheme(mode, prefersDark)
+
+  // Suppress transitions for the swap itself. Otherwise elements with
+  // color/background transitions (toggle pills, directory ticks, controls)
+  // visibly lag behind the rest of the page.
+  root.classList.add("theme-switching")
+  const previous = transitionTimers.get(root)
+  if (previous !== undefined) win?.clearTimeout(previous)
+  transitionTimers.delete(root)
+
   root.classList.toggle("dark", resolved === "dark")
   root.style.colorScheme = resolved
+
+  if (!win) {
+    root.classList.remove("theme-switching")
+    return
+  }
+
+  const timer = win.setTimeout(() => {
+    transitionTimers.delete(root)
+    root.classList.remove("theme-switching")
+  }, THEME_SWITCH_MS)
+  transitionTimers.set(root, timer)
 }

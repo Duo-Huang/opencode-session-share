@@ -1,13 +1,18 @@
-import { For, Show } from "solid-js"
+import { Key } from "@solid-primitives/keyed"
+import { Show } from "solid-js"
 import { useDisclosure } from "../hooks/use-disclosure"
-import type { AssistantBlock } from "../lib/types"
+import type {
+  AssistantActivityBlock,
+  AssistantReasoningEntry,
+  AssistantToolEntry,
+} from "../lib/types"
 import { formatDuration } from "../lib/format"
 import { ReasoningPart } from "./ReasoningPart"
 import { SparklesIcon, TerminalIcon } from "./icons"
 import { ToolCard } from "./ToolCard"
 
 export function ActivityGroup(props: {
-  block: Extract<AssistantBlock, { kind: "activity" }>
+  block: AssistantActivityBlock
   shareId: string
   running?: boolean
 }) {
@@ -52,26 +57,33 @@ export function ActivityGroup(props: {
         </span>
       </summary>
       <div class="activity-body">
-        <For each={props.block.parts}>
-          {(entry) =>
-            entry.part.type === "reasoning" ? (
-              <ReasoningPart
-                text={entry.part.text}
-                durationMs={entry.part.durationMs}
-                shareId={props.shareId}
-                messageIndex={entry.messageIndex}
-                partIndex={entry.partIndex}
-              />
-            ) : (
+        <Key each={props.block.parts} by={(entry) => `${entry.messageIndex}:${entry.partIndex}`}>
+          {(entry) => {
+            const part = entry().part
+            if (part.type === "reasoning") {
+              const reasoning = entry as () => AssistantReasoningEntry
+              return (
+                <ReasoningPart
+                  text={reasoning().part.text}
+                  durationMs={reasoning().part.durationMs}
+                  shareId={props.shareId}
+                  messageIndex={entry().messageIndex}
+                  partIndex={entry().partIndex}
+                />
+              )
+            }
+
+            const tool = entry as () => AssistantToolEntry
+            return (
               <ToolCard
-                part={entry.part}
+                part={tool().part}
                 shareId={props.shareId}
-                messageIndex={entry.messageIndex}
-                partIndex={entry.partIndex}
+                messageIndex={entry().messageIndex}
+                partIndex={entry().partIndex}
               />
             )
-          }
-        </For>
+          }}
+        </Key>
         <Show when={props.running}>
           <div class="activity-loading" role="status">
             <span class="typing-dots" aria-hidden="true">

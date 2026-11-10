@@ -72,6 +72,49 @@ export function useShare(id: string, options: { getAnchorId: () => string }) {
   let lastFrameAt = 0
   let activeFrame: number | undefined
 
+  const isNearBottom = (margin = 0) =>
+    window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - margin
+
+  type ShareMeta = Omit<PublicShare, "messages" | "page">
+
+  const clearPendingPages = () => {
+    ++pageRequest
+    setLoadingPage(false)
+    setLoadingTail(false)
+  }
+
+  const applyTrim = (current: ShareView, meta: Partial<ShareMeta>, total: number) => {
+    const anchor = captureAnchor(options.getAnchorId())
+    const trimmed = trimToTotal(current.messages, current.ranges, total)
+    clearPendingPages()
+    setView({
+      ...current,
+      ...meta,
+      messages: trimmed.messages,
+      ranges: trimmed.ranges,
+      total,
+    })
+    setNewMessages(false)
+    setPendingAnchor(anchor)
+  }
+
+  const applyReset = (next: ShareView | null) => {
+    const anchor = captureAnchor(options.getAnchorId())
+    clearPendingPages()
+    setView(next)
+    setPendingAnchor(anchor)
+  }
+
+  const handleAppend = (current: ShareView) => {
+    if (!isNearBottom(240) || hasAfter(current)) {
+      setNewMessages(true)
+      return
+    }
+    // The reader is already following the tail: load it and follow silently.
+    setNewMessages(false)
+    void loadNextPage(true)
+  }
+
   const applySnapshot = (data: PublicShare) => {
     const current = view()
     if (!current) {
@@ -87,30 +130,12 @@ export function useShare(id: string, options: { getAnchorId: () => string }) {
     })
 
     if (plan.kind === "trim") {
-      const anchor = captureAnchor(options.getAnchorId())
-      const trimmed = trimToTotal(current.messages, current.ranges, data.page.total)
-      ++pageRequest
-      setLoadingPage(false)
-      setLoadingTail(false)
-      setView({
-        ...current,
-        ...meta,
-        messages: trimmed.messages,
-        ranges: trimmed.ranges,
-        total: data.page.total,
-      })
-      setNewMessages(false)
-      setPendingAnchor(anchor)
+      applyTrim(current, meta, data.page.total)
       return
     }
 
     if (plan.kind === "reset") {
-      const anchor = captureAnchor(options.getAnchorId())
-      ++pageRequest
-      setLoadingPage(false)
-      setLoadingTail(false)
-      setView(toShareView(data))
-      setPendingAnchor(anchor)
+      applyReset(toShareView(data))
       return
     }
 
@@ -130,7 +155,7 @@ export function useShare(id: string, options: { getAnchorId: () => string }) {
       ranges: current.ranges,
       total: data.page.total,
     })
-    if (plan.kind === "append") setNewMessages(true)
+    if (plan.kind === "append") handleAppend(current)
   }
 
   const fetchPage = async (cursor: PageCursor, signal?: AbortSignal): Promise<PageData> => {
@@ -322,9 +347,7 @@ export function useShare(id: string, options: { getAnchorId: () => string }) {
     const current = view()
     const last = current?.ranges.at(-1)
     if (!current || !last || loadingPage() || (!force && !hasAfter(current))) return
-    const follow =
-      force &&
-      window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 240
+    const follow = force && isNearBottom(240)
     const request = ++pageRequest
     setLoadingPage(true)
     try {
@@ -335,7 +358,12 @@ export function useShare(id: string, options: { getAnchorId: () => string }) {
       if (follow) {
         queueMicrotask(() => {
           requestAnimationFrame(() => {
-            window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" })
+            // Following a live append should track the bottom immediately;
+            // restarting a smooth scroll for every chunk looks like flicker.
+            window.scrollTo({
+              top: document.documentElement.scrollHeight,
+              behavior: "auto",
+            })
           })
         })
       }
@@ -454,42 +482,19 @@ export function useShare(id: string, options: { getAnchorId: () => string }) {
     })
 
     if (plan.kind === "trim") {
-      const anchor = captureAnchor(options.getAnchorId())
-      const trimmed = trimToTotal(current.messages, current.ranges, data.total)
-      ++pageRequest
-      setLoadingPage(false)
-      setLoadingTail(false)
-      setView({
-        ...current,
-        ...metadata,
-        messages: trimmed.messages,
-        ranges: trimmed.ranges,
-        total: data.total,
-      })
-      setNewMessages(false)
-      setPendingAnchor(anchor)
+      applyTrim(current, metadata, data.total)
       return
     }
 
     if (plan.kind === "reset") {
-      const anchor = captureAnchor(options.getAnchorId())
-      ++pageRequest
-      setLoadingPage(false)
-      setLoadingTail(false)
-      setView(null)
-      setPendingAnchor(anchor)
+      applyReset(null)
       void refresh(true)
       return
     }
 
     setView({ ...current, ...metadata, total: data.total })
 
-    if (plan.kind === "append") {
-      setNewMessages(true)
-      const atBottom =
-        window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 240
-      if (atBottom && !hasAfter(current)) void loadNextPage(true)
-    }
+    if (plan.kind === "append") handleAppend(current)
   }
 
   function clearStatusTimer() {

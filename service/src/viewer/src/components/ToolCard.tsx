@@ -138,7 +138,7 @@ export function ToolCard(props: {
           <div class="terminal">
             <div class="terminal-head">bash</div>
             <pre>
-              <span class="text-emerald-400">$</span> {String(input().command ?? input().cmd ?? "")}
+              <span class="text-[var(--code-tag)]">$</span> {String(input().command ?? input().cmd ?? "")}
               {output() ? `\n${output()}` : ""}
             </pre>
           </div>

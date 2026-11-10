@@ -65,8 +65,8 @@
 }
 
 .copy-button[data-copied="true"] {
-  color: #2ea043;
-  border-color: #2ea043;
+  color: var(--code-tag);
+  border-color: var(--code-tag);
 }
 
 .hljs {
@@ -178,18 +178,25 @@
 }
 
 .terminal {
-  border: 1px solid var(--line);
+  border: 1px solid var(--code-border);
   border-radius: 10px;
   overflow: hidden;
-  background: #0d1117;
-  color: #e6edf3;
+  background: var(--code-bg);
+  color: var(--code-ink);
 }
 
 .terminal-head {
   padding: 0.45rem 0.7rem;
-  border-bottom: 1px solid #21262d;
-  color: #9ca3af;
+  border-bottom: 1px solid var(--code-border);
+  color: var(--code-muted);
   font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.terminal-exit {
+  border-top: 1px solid var(--code-border);
+  padding: 0.375rem 0.75rem;
+  color: var(--code-muted);
+  font-size: 11px;
 }
 
 .terminal pre {

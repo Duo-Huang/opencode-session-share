@@ -63,12 +63,12 @@ Then run `/reload`, or `opencode service restart` if the TUI did not pick it up.
 
 `opencode plugin update` updates the installed npm package but does **not** modify `options` in `opencode.jsonc`. Your endpoint, keyId, and key stay as configured.
 
-v0.3.3 counts visible conversation turns in the header and Contents threshold, and keeps scrolling inside the Contents panel. It requires service API version 3; upgrade the service and plugin together.
+v0.3.4 keeps assistant blocks mounted while streaming, keeps the New messages prompt stable at the tail, scopes share storage per endpoint, excludes compaction notices from turn counts, and makes terminal colors and theme switching follow light/dark atomically. It requires service API version 3; upgrade the service and plugin together.
 
 If you pin an exact version:
 
 ```jsonc
-"package": "opencode-session-share-plugin@0.3.3"
+"package": "opencode-session-share-plugin@0.3.4"
 ```
 
 `opencode plugin update` skips it. Change the version manually to upgrade.

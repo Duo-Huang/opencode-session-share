@@ -137,7 +137,10 @@ export type ShareSnapshot = {
 export type ShareStats = {
   /** Raw snapshot messages, including every assistant step. */
   messages: number
-  /** User-visible conversation turns; consecutive assistant steps count once. */
+  /**
+   * User-visible conversation turns: user/shell messages count once,
+   * consecutive assistant steps count once, and compaction notices are excluded.
+   */
   turns: number
   tools: number
   cost: number

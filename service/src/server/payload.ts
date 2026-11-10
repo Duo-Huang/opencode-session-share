@@ -361,16 +361,17 @@ function hasBodyTruncation(snapshot: ValidShareSnapshot) {
 }
 
 /**
- * Count what the viewer renders as a top-level turn: user/shell/notice messages
- * each count once, and a run of consecutive assistant steps counts once.
+ * Count user-visible conversation turns: user and shell messages each count
+ * once, a run of consecutive assistant steps counts once, and system notices
+ * (including compaction summaries) are excluded.
  */
 function countTurns(messages: SnapshotMessage[]) {
   let turns = 0
   let previousRole: SnapshotMessage["role"] | undefined
   for (const message of messages) {
-    if (message.role === "assistant") {
-      if (previousRole !== "assistant") turns++
-    } else {
+    if (message.role === "user" || message.role === "shell") {
+      turns++
+    } else if (message.role === "assistant" && previousRole !== "assistant") {
       turns++
     }
     previousRole = message.role

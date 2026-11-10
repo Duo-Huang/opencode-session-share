@@ -12,7 +12,13 @@ import {
   type ShareMeta,
 } from "./client"
 import { normalizeSession } from "./normalize"
-import { parseShareKey, shareKey, SHARE_PREFIX } from "./storage"
+import {
+  endpointFromShareUrl,
+  normalizeEndpoint,
+  parseShareKey,
+  shareKey,
+  SHARE_PREFIX,
+} from "./storage"
 
 type StoredShare = ShareMeta & {
   privateKey: string
@@ -115,23 +121,17 @@ export default Plugin.define({
 
     const configuredEndpoint = () => {
       try {
-        return endpoint(pluginOptions)
+        return normalizeEndpoint(endpoint(pluginOptions))
       } catch {
         return ""
       }
     }
 
     const sameEndpoint = (left: string, right: string) =>
-      left.replace(/\/+$/, "") === right.replace(/\/+$/, "")
+      normalizeEndpoint(left) === normalizeEndpoint(right)
 
-    const storedEndpoint = (stored: StoredShare, current: string) => {
-      if (stored.endpoint) return stored.endpoint
-      try {
-        return new URL(stored.url).origin
-      } catch {
-        return current
-      }
-    }
+    const storedEndpoint = (stored: StoredShare, current: string) =>
+      normalizeEndpoint(stored.endpoint || endpointFromShareUrl(stored.url) || current)
 
     const toStored = (state: ShareState): StoredShare => ({
       id: state.id,
@@ -223,7 +223,14 @@ export default Plugin.define({
         (info as { location?: { directory?: string } }).location?.directory ??
         fallbackDirectory
       const messages = (await ctx.session.context({ sessionID })) as readonly any[]
-      const running = busySessions.get(sessionID) ?? persistedRunning(info)
+      const persisted = persistedRunning(info)
+
+      // The persisted projector state is authoritative when it is idle.
+      // A stale in-memory busy flag must not keep a stopped session running.
+      if (persisted === false) busySessions.delete(sessionID)
+      const running =
+        persisted === false ? false : (busySessions.get(sessionID) ?? persisted)
+
       return {
         snapshot: normalizeSession(
           ctx.app,
@@ -245,8 +252,10 @@ export default Plugin.define({
 
     const forgetShare = async (sessionID: string, directory?: string) => {
       const state = shares.get(sessionID)
+      const endpoint = state ? storedEndpoint(state, configuredEndpoint()) : configuredEndpoint()
       const key =
-        state?.storageKey ?? shareKey(directory ?? ctx.location.directory, sessionID)
+        state?.storageKey ??
+        shareKey(endpoint, directory ?? ctx.location.directory, sessionID)
       stopState(sessionID)
       busySessions.delete(sessionID)
       try {
@@ -314,16 +323,35 @@ export default Plugin.define({
       state.timer.unref?.()
     }
 
-    const rememberShare = async (sessionID: string, share: StoredShare) => {
+    const rememberShare = async (
+      sessionID: string,
+      share: StoredShare,
+      previousKey?: string,
+    ) => {
       const current = configuredEndpoint()
       const { endpoint: existing, ...rest } = share
+      const endpoint = normalizeEndpoint(existing || current)
       const stored: StoredShare = {
         ...rest,
-        ...(existing || current ? { endpoint: existing ?? current } : {}),
+        ...(endpoint ? { endpoint } : {}),
       }
-      const storageKey = shareKey(stored.directory, sessionID)
-      await ctx.storage.set(storageKey, stored)
+      const storageKey = shareKey(endpoint, stored.directory, sessionID)
       const previous = shares.get(sessionID)
+
+      await ctx.storage.set(storageKey, stored)
+
+      // Drop a legacy key only for the same server. Another endpoint's share
+      // must stay in storage so switching back can still reuse it.
+      if (previousKey && previousKey !== storageKey) {
+        await ctx.storage.remove(previousKey).catch(() => {})
+      } else if (
+        previous?.storageKey &&
+        previous.storageKey !== storageKey &&
+        sameEndpoint(storedEndpoint(previous, current), endpoint)
+      ) {
+        await ctx.storage.remove(previous.storageKey).catch(() => {})
+      }
+
       if (previous?.timer) clearTimeout(previous.timer)
       shares.set(sessionID, {
         ...stored,
@@ -345,7 +373,11 @@ export default Plugin.define({
           }
         : await findStoredShare(sessionID)
       const directory = state?.directory ?? found?.directory ?? ctx.location.directory
-      const key = state?.storageKey ?? found?.key ?? shareKey(directory, sessionID)
+      const endpoint = state ? storedEndpoint(state, configuredEndpoint()) : configuredEndpoint()
+      const key =
+        state?.storageKey ??
+        found?.key ??
+        shareKey(endpoint, directory, sessionID)
       stopState(sessionID)
       busySessions.delete(sessionID)
 
@@ -427,12 +459,16 @@ export default Plugin.define({
         if (existing && found) {
           // The local private key is still available. Refresh the fixed expiry
           // from the server rather than creating a new share.
-          await rememberShare(sessionID, {
-            ...found.stored,
-            directory: found.directory,
-            url: existing.url,
-            expiresAt: existing.expiresAt,
-          })
+          await rememberShare(
+            sessionID,
+            {
+              ...found.stored,
+              directory: found.directory,
+              url: existing.url,
+              expiresAt: existing.expiresAt,
+            },
+            found.key,
+          )
           return { consentRequired: false, share: existing }
         }
         // A remote share without a local private key cannot be updated. The
@@ -444,12 +480,16 @@ export default Plugin.define({
         const existing = await prepareShare(sessionID, pluginOptions)
         const found = await findStoredShare(sessionID)
         if (existing && found) {
-          await rememberShare(sessionID, {
-            ...found.stored,
-            directory: found.directory,
-            url: existing.url,
-            expiresAt: existing.expiresAt,
-          })
+          await rememberShare(
+            sessionID,
+            {
+              ...found.stored,
+              directory: found.directory,
+              url: existing.url,
+              expiresAt: existing.expiresAt,
+            },
+            found.key,
+          )
           schedule(sessionID, true)
           return {
             id: existing.id,
@@ -503,18 +543,27 @@ export default Plugin.define({
       if (!current) return
       const items = await scanStoredShares()
       for (const item of items) {
-        if (!sameEndpoint(storedEndpoint(item.stored, current), current)) continue
+        const endpoint = storedEndpoint(item.stored, current)
+        if (!sameEndpoint(endpoint, current)) continue
         if (item.stored.expiresAt <= Date.now()) {
           try {
             await ctx.storage.remove(item.key)
           } catch {}
           continue
         }
+
+        // Migrate legacy directory-only keys to endpoint-scoped keys so two
+        // servers can keep independent shares for the same session.
+        const storageKey = shareKey(endpoint, item.directory, item.sessionID)
+        if (storageKey !== item.key) {
+          await ctx.storage.set(storageKey, item.stored)
+          await ctx.storage.remove(item.key).catch(() => {})
+        }
         shares.set(item.sessionID, {
           ...item.stored,
           directory: item.directory,
           sessionID: item.sessionID,
-          storageKey: item.key,
+          storageKey,
           dirty: false,
           syncing: false,
         })
@@ -535,7 +584,10 @@ export default Plugin.define({
             busySessions.set(sessionID, true)
             schedule(sessionID, true)
           } else if (running === false) {
+            // Correct a share that was last uploaded while a turn was running
+            // but has since gone idle.
             busySessions.delete(sessionID)
+            schedule(sessionID, true)
           }
         }),
       )
