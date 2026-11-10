@@ -72,6 +72,9 @@ export function useShare(id: string, options: { getAnchorId: () => string }) {
   let lastFrameAt = 0
   let activeFrame: number | undefined
 
+  const isNearBottom = (margin = 0) =>
+    window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - margin
+
   const applySnapshot = (data: PublicShare) => {
     const current = view()
     if (!current) {
@@ -130,7 +133,11 @@ export function useShare(id: string, options: { getAnchorId: () => string }) {
       ranges: current.ranges,
       total: data.page.total,
     })
-    if (plan.kind === "append") setNewMessages(true)
+    if (plan.kind === "append") {
+      // A reader already parked at the bottom follows silently; only surface
+      // the jump pill when the new messages are off-screen.
+      setNewMessages(!isNearBottom(240))
+    }
   }
 
   const fetchPage = async (cursor: PageCursor, signal?: AbortSignal): Promise<PageData> => {
@@ -322,9 +329,7 @@ export function useShare(id: string, options: { getAnchorId: () => string }) {
     const current = view()
     const last = current?.ranges.at(-1)
     if (!current || !last || loadingPage() || (!force && !hasAfter(current))) return
-    const follow =
-      force &&
-      window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 240
+    const follow = force && isNearBottom(240)
     const request = ++pageRequest
     setLoadingPage(true)
     try {
@@ -335,7 +340,12 @@ export function useShare(id: string, options: { getAnchorId: () => string }) {
       if (follow) {
         queueMicrotask(() => {
           requestAnimationFrame(() => {
-            window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" })
+            // Following a live append should track the bottom immediately;
+            // restarting a smooth scroll for every chunk looks like flicker.
+            window.scrollTo({
+              top: document.documentElement.scrollHeight,
+              behavior: "auto",
+            })
           })
         })
       }
@@ -485,10 +495,13 @@ export function useShare(id: string, options: { getAnchorId: () => string }) {
     setView({ ...current, ...metadata, total: data.total })
 
     if (plan.kind === "append") {
-      setNewMessages(true)
-      const atBottom =
-        window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 240
-      if (atBottom && !hasAfter(current)) void loadNextPage(true)
+      if (isNearBottom(240) && !hasAfter(current)) {
+        // The reader is already following the tail: load and follow silently.
+        setNewMessages(false)
+        void loadNextPage(true)
+      } else {
+        setNewMessages(true)
+      }
     }
   }
 
