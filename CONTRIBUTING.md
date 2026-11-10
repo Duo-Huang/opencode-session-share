@@ -90,20 +90,21 @@ A `service-vX.Y.Z` tag is invalid if any non-test file under `plugin/src/` or
 `vX.Y.Z` release instead. The release workflow checks this before building or
 publishing.
 
-Full release:
+Land the release commit on `main` through a pull request, then tag the merged
+commit:
 
 ```bash
-# Bump plugin/package.json to X.Y.Z first.
+git switch main
+git pull
 git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-Service-only release:
+Full release: bump `plugin/package.json` to `X.Y.Z` in the pull request first,
+then use tag `vX.Y.Z`.
 
-```bash
-git tag service-vX.Y.Z
-git push origin service-vX.Y.Z
-```
+Service-only release: leave `plugin/package.json` unchanged, then use tag
+`service-vX.Y.Z`.
 
 Both tags build and publish the multi-arch GHCR image and update `latest`.
 Full releases also publish `opencode-session-share-plugin` to npm through
@@ -128,6 +129,20 @@ npm publish --access public
 ```
 
 Use normal 2FA. Do not create or share bypass-2FA tokens.
+
+## Branches and reviews
+
+`main` only accepts pull requests:
+
+- CI must pass: `plugin`, `service`, and `shared-types`.
+- The branch must be up to date with `main` before merging.
+- Pull requests are squash-merged, and the branch is deleted after merge.
+- No approval is required today, so a maintainer can self-merge once CI is
+  green. Add a required reviewer when the project gains maintainers.
+
+Do not force-push or delete `main`. Treat release tags as immutable: cut a new
+version instead of moving or deleting a published tag. Only maintainers can
+create `v*` and `service-v*` tags.
 
 ## Pull requests
 
