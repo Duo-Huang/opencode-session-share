@@ -36,8 +36,10 @@ If this prints anything, use a full `vX.Y.Z` release, not
 
 1. Classify the release using `CONTRIBUTING.md`.
 2. Run the checks it lists.
-3. Create and push the tag.
-4. Wait for the Release workflow to succeed.
-5. Verify what it published, then deploy per `docs/self-hosting.md`.
+3. Land the release commit on `main` through a pull request; direct pushes are
+   blocked.
+4. Create and push the tag from the merged `main`.
+5. Wait for the Release workflow to succeed.
+6. Verify what it published, then deploy per `docs/self-hosting.md`.
 
 Do not copy release commands or deployment details into this skill.
