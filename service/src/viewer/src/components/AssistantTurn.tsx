@@ -1,10 +1,13 @@
-import { createMemo, For, Show } from "solid-js"
-import type { AssistantEntry } from "../lib/types"
+import { Key } from "@solid-primitives/keyed"
+import { createMemo, Show } from "solid-js"
+import type { AssistantBlock, AssistantEntry } from "../lib/types"
 import { formatCost, formatDate, formatNumber } from "../lib/format"
 import { buildAssistantBlocks, turnMeta } from "../lib/turns"
 import { ActivityGroup } from "./ActivityGroup"
 import { AssistantWorking } from "./AssistantWorking"
 import { TextPart } from "./TextPart"
+
+const blockKey = (block: AssistantBlock) => (block.kind === "text" ? block.id : block.key)
 
 export function AssistantTurn(props: {
   messages: AssistantEntry[]
@@ -21,27 +24,37 @@ export function AssistantTurn(props: {
     const tokens = meta().tokens
     return tokens.input + tokens.output + tokens.reasoning > 0
   }
+  const lastBlockKey = () => {
+    const last = blocks().at(-1)
+    return last ? blockKey(last) : ""
+  }
 
   return (
     <div class="assistant-turn">
-      <For each={blocks()}>
-        {(block, blockIndex) =>
-          block.kind === "text" ? (
-            <TextPart
-              id={block.id}
-              text={block.text}
-              expand={block.id === props.lastTextId}
-              shareId={props.shareId}
-            />
-          ) : (
+      <Key each={blocks()} by={blockKey}>
+        {(block) => {
+          if (block().kind === "text") {
+            const text = block as () => Extract<AssistantBlock, { kind: "text" }>
+            return (
+              <TextPart
+                id={text().id}
+                text={text().text}
+                expand={text().id === props.lastTextId}
+                shareId={props.shareId}
+              />
+            )
+          }
+
+          const activity = block as () => Extract<AssistantBlock, { kind: "activity" }>
+          return (
             <ActivityGroup
-              block={block}
+              block={activity()}
               shareId={props.shareId}
-              running={props.running === true && blockIndex() === blocks().length - 1}
+              running={props.running === true && blockKey(activity()) === lastBlockKey()}
             />
           )
-        }
-      </For>
+        }}
+      </Key>
 
       <Show when={hasText()}>
         <div class="assistant-meta">
