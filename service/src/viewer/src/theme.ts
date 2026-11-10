@@ -1,6 +1,8 @@
 export type ThemeMode = "light" | "dark" | "system"
 
 const STORAGE_KEY = "oc-share-theme"
+// Long enough to cover the browser's next paint with transitions disabled.
+const THEME_SWITCH_MS = 120
 
 export function normalizeThemeMode(value: string | null | undefined): ThemeMode {
   if (value === "light" || value === "dark" || value === "system") return value
@@ -54,6 +56,6 @@ export function applyTheme(mode: ThemeMode, root: HTMLElement = document.documen
   const timer = win.setTimeout(() => {
     transitionTimers.delete(root)
     root.classList.remove("theme-switching")
-  }, 120)
+  }, THEME_SWITCH_MS)
   transitionTimers.set(root, timer)
 }
