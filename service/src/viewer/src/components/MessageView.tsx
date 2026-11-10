@@ -36,13 +36,11 @@ export function MessageView(props: { message: ShareMessage; shareId: string }) {
       <div class="terminal">
         <div class="terminal-head">shell · {props.message.status}</div>
         <pre>
-          <span class="text-emerald-400">$</span> {props.message.command}
+          <span class="text-[var(--code-tag)]">$</span> {props.message.command}
           {props.message.output ? `\n${props.message.output}` : ""}
         </pre>
         <Show when={props.message.exit !== undefined}>
-          <div class="border-t border-[#21262d] px-3 py-1.5 text-[11px] text-[#9ca3af]">
-            exit {String(props.message.exit)}
-          </div>
+          <div class="terminal-exit">exit {String(props.message.exit)}</div>
         </Show>
       </div>
     )

@@ -167,6 +167,26 @@ describe("buildShareView", () => {
     // Pagination still uses the raw message total.
     expect(view.total).toBe(5)
   })
+
+  test("excludes compaction notices but counts shell messages", () => {
+    const base = makeSnapshot()
+    const assistant = base.messages[1]
+    if (assistant.role !== "assistant") throw new Error("expected assistant")
+    const snapshot: ValidShareSnapshot = {
+      ...base,
+      messages: [
+        { role: "notice", kind: "compaction", time: 0, text: "summary" },
+        base.messages[0],
+        assistant,
+        { role: "shell", time: 3, command: "pwd", output: "/tmp", exit: 0, status: "exited" },
+      ],
+    }
+
+    const view = buildShareView(snapshot, 64 * 1024)
+    expect(view.stats.messages).toBe(4)
+    expect(view.stats.turns).toBe(3)
+    expect(view.total).toBe(4)
+  })
 })
 
 describe("searchSnapshot", () => {
