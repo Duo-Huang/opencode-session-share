@@ -61,6 +61,7 @@ function makeContext(options: {
     },
     location: { directory: "/work/a" },
     app: { version: "2.2.6" },
+    sessionTime,
     storage: {
       async scan({ prefix }: { prefix: string }) {
         return {
@@ -77,6 +78,9 @@ function makeContext(options: {
       },
       async remove(key: string) {
         entries.delete(key)
+      },
+      async keys() {
+        return [...entries.keys()]
       },
     },
     session: {
@@ -167,6 +171,86 @@ describe("session-share plugin", () => {
       events.push({ type: "session.execution.started", data: { sessionID: "ses_2" } })
       await sleep(300)
       expect(snapshots.at(-1)?.snapshot.session?.running).toBe(true)
+    } finally {
+      await cleanup()
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("persisted idle overrides a stale in-memory busy flag", async () => {
+    originalFetch = globalThis.fetch
+    const events: TestEvent[] = []
+    const snapshots: TestSnapshot[] = []
+    const ctx = makeContext({
+      shareID: "share_4",
+      sessionID: "ses_4",
+      events,
+      sessionTime: { created: 1, busy: 200, idle: 100 },
+    })
+    mockFetch((body) => {
+      snapshots.push(JSON.parse(gunzipSync(body).toString()))
+    })
+
+    const cleanup = (await plugin.setup(ctx as any)) as () => Promise<void>
+    try {
+      await sleep(300)
+      expect(snapshots.at(-1)?.snapshot.session?.running).toBe(true)
+
+      // The persisted projector has gone idle, but the event that would clear
+      // the in-memory flag was missed.
+      ctx.sessionTime.idle = 300
+      events.push({ type: "session.text.ended", data: { sessionID: "ses_4" } })
+      await sleep(1200)
+
+      expect(snapshots.at(-1)?.snapshot.session?.running).toBe(false)
+    } finally {
+      await cleanup()
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("hydrating an idle share corrects a prior running snapshot", async () => {
+    originalFetch = globalThis.fetch
+    const events: TestEvent[] = []
+    const snapshots: TestSnapshot[] = []
+    const ctx = makeContext({
+      shareID: "share_5",
+      sessionID: "ses_5",
+      events,
+      sessionTime: { created: 1, busy: 100, idle: 200 },
+    })
+    mockFetch((body) => {
+      snapshots.push(JSON.parse(gunzipSync(body).toString()))
+    })
+
+    const cleanup = (await plugin.setup(ctx as any)) as () => Promise<void>
+    try {
+      await sleep(300)
+      expect(snapshots.length).toBeGreaterThan(0)
+      expect(snapshots.at(-1)?.snapshot.session?.running).toBe(false)
+    } finally {
+      await cleanup()
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("migrates legacy storage keys to endpoint-scoped keys", async () => {
+    originalFetch = globalThis.fetch
+    const events: TestEvent[] = []
+    const ctx = makeContext({
+      shareID: "share_6",
+      sessionID: "ses_6",
+      events,
+      sessionTime: { created: 1, busy: 100, idle: 200 },
+    })
+    mockFetch()
+
+    const cleanup = (await plugin.setup(ctx as any)) as () => Promise<void>
+    try {
+      await sleep(300)
+      const keys = await (ctx as any).storage.keys()
+      expect(keys).toContain("share:https://example.test|/work/a|ses_6")
+      expect(keys).not.toContain("share:/work/a:ses_6")
     } finally {
       await cleanup()
       globalThis.fetch = originalFetch
