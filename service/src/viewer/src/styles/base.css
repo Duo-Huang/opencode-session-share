@@ -74,3 +74,11 @@ body {
 ::selection {
   background: color-mix(in srgb, var(--ink) 18%, transparent);
 }
+
+/* A theme swap must be atomic. Transitions are restored right after paint so
+   hover/focus animations keep working. */
+html.theme-switching *,
+html.theme-switching *::before,
+html.theme-switching *::after {
+  transition: none !important;
+}
