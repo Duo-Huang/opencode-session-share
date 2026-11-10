@@ -45,7 +45,7 @@ Or use the published image:
 docker compose -f compose.ghcr.yml up -d
 ```
 
-Set `SHARE_VERSION=v0.3.2` in `.env` to pin the image.
+Set `SHARE_VERSION=v0.3.3` in `.env` to pin the image.
 
 Check:
 
