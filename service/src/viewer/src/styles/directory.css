@@ -93,6 +93,7 @@
   flex-direction: column;
   width: min(22rem, calc(100vw - 2rem));
   overflow: hidden;
+  overscroll-behavior: contain;
   border: 1px solid var(--line);
   border-radius: 14px;
   background: var(--page);
@@ -123,6 +124,7 @@
 .directory-panel-list {
   flex: 1 1 auto;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 0.35rem;
 }
 

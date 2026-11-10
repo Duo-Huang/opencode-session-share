@@ -849,6 +849,7 @@ export function useShare(id: string, options: { getAnchorId: () => string }) {
     () =>
       view()?.stats ?? {
         messages: 0,
+        turns: 0,
         tools: 0,
         cost: 0,
         tokens: { input: 0, output: 0, reasoning: 0 },

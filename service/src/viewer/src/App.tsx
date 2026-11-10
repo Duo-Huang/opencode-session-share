@@ -61,10 +61,11 @@ export function App() {
           )}
         </Show>
 
+        {/* Contents only pays off for long conversations, measured in visible turns. */}
         <Directory
           directory={directory}
           shareId={id}
-          showContents={share.stats().messages > 30}
+          showContents={share.stats().turns > 30}
           jumpToTarget={share.jumpToTarget}
         />
 

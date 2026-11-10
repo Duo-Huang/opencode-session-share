@@ -80,7 +80,8 @@ export function ShareHeader(props: {
               <div class="stat-strip">
                 <div class="stat">
                   <span class="stat-label">Messages</span>
-                  <span class="stat-value">{props.stats().messages}</span>
+                  {/* Reader-facing count: grouped turns, not raw assistant steps. */}
+                  <span class="stat-value">{props.stats().turns}</span>
                 </div>
                 <div class="stat">
                   <span class="stat-label">Tools</span>

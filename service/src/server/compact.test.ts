@@ -141,8 +141,31 @@ describe("buildShareView", () => {
     const view = buildShareView(snapshot, 64 * 1024)
     expect(view.index).toHaveLength(2)
     expect(view.stats.messages).toBe(2)
+    expect(view.stats.turns).toBe(2)
     expect(view.messages.length).toBeGreaterThan(0)
     expect(ShareSnapshotSchema.safeParse(snapshot).success).toBe(true)
+  })
+
+  test("counts grouped assistant steps as one visible turn", () => {
+    const base = makeSnapshot()
+    const assistant = base.messages[1]
+    if (assistant.role !== "assistant") throw new Error("expected assistant")
+    const snapshot: ValidShareSnapshot = {
+      ...base,
+      messages: [
+        base.messages[0],
+        assistant,
+        { ...assistant, time: assistant.time + 1 },
+        { role: "user", time: 4, text: "again" },
+        { ...assistant, time: 5 },
+      ],
+    }
+
+    const view = buildShareView(snapshot, 64 * 1024)
+    expect(view.stats.messages).toBe(5)
+    expect(view.stats.turns).toBe(4)
+    // Pagination still uses the raw message total.
+    expect(view.total).toBe(5)
   })
 })
 

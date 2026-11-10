@@ -360,9 +360,28 @@ function hasBodyTruncation(snapshot: ValidShareSnapshot) {
   })
 }
 
+/**
+ * Count what the viewer renders as a top-level turn: user/shell/notice messages
+ * each count once, and a run of consecutive assistant steps counts once.
+ */
+function countTurns(messages: SnapshotMessage[]) {
+  let turns = 0
+  let previousRole: SnapshotMessage["role"] | undefined
+  for (const message of messages) {
+    if (message.role === "assistant") {
+      if (previousRole !== "assistant") turns++
+    } else {
+      turns++
+    }
+    previousRole = message.role
+  }
+  return turns
+}
+
 export function viewStats(snapshot: ValidShareSnapshot): ShareStats {
   return {
     messages: snapshot.messages.length,
+    turns: countTurns(snapshot.messages),
     tools: countTools(snapshot),
     cost: totalCost(snapshot),
     tokens: totalTokens(snapshot),
