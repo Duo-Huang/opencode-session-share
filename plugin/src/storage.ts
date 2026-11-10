@@ -7,8 +7,20 @@ export type ShareKey = {
   sessionID: string
 }
 
-function normalizeEndpoint(endpoint: string) {
+export function normalizeEndpoint(endpoint: string) {
   return endpoint.replace(/\/+$/, "")
+}
+
+/** Recover the configured service base from a public share URL. */
+export function endpointFromShareUrl(url: string) {
+  try {
+    const parsed = new URL(url)
+    const marker = parsed.pathname.lastIndexOf("/s/")
+    const basePath = marker >= 0 ? parsed.pathname.slice(0, marker) : ""
+    return normalizeEndpoint(`${parsed.origin}${basePath}`)
+  } catch {
+    return undefined
+  }
 }
 
 export function shareKey(endpoint: string, directory: string, sessionID: string) {

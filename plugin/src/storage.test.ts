@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { parseShareKey, shareKey } from "./storage"
+import { endpointFromShareUrl, parseShareKey, shareKey } from "./storage"
 
 describe("share storage keys", () => {
   test("round-trips endpoint, directory, and session", () => {
@@ -27,6 +27,16 @@ describe("share storage keys", () => {
     expect(shareKey("https://a.example", "/work", "ses_1")).not.toBe(
       shareKey("https://b.example", "/work", "ses_1"),
     )
+  })
+
+  test("recovers a service base path from a share URL", () => {
+    expect(endpointFromShareUrl("https://share.example.com/s/share_1")).toBe(
+      "https://share.example.com",
+    )
+    expect(endpointFromShareUrl("https://share.example.com/base/s/share_1")).toBe(
+      "https://share.example.com/base",
+    )
+    expect(endpointFromShareUrl("not a url")).toBeUndefined()
   })
 
   test("ignores unrelated keys", () => {

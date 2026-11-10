@@ -12,7 +12,13 @@ import {
   type ShareMeta,
 } from "./client"
 import { normalizeSession } from "./normalize"
-import { parseShareKey, shareKey, SHARE_PREFIX } from "./storage"
+import {
+  endpointFromShareUrl,
+  normalizeEndpoint,
+  parseShareKey,
+  shareKey,
+  SHARE_PREFIX,
+} from "./storage"
 
 type StoredShare = ShareMeta & {
   privateKey: string
@@ -115,23 +121,17 @@ export default Plugin.define({
 
     const configuredEndpoint = () => {
       try {
-        return endpoint(pluginOptions)
+        return normalizeEndpoint(endpoint(pluginOptions))
       } catch {
         return ""
       }
     }
 
     const sameEndpoint = (left: string, right: string) =>
-      left.replace(/\/+$/, "") === right.replace(/\/+$/, "")
+      normalizeEndpoint(left) === normalizeEndpoint(right)
 
-    const storedEndpoint = (stored: StoredShare, current: string) => {
-      if (stored.endpoint) return stored.endpoint
-      try {
-        return new URL(stored.url).origin
-      } catch {
-        return current
-      }
-    }
+    const storedEndpoint = (stored: StoredShare, current: string) =>
+      normalizeEndpoint(stored.endpoint || endpointFromShareUrl(stored.url) || current)
 
     const toStored = (state: ShareState): StoredShare => ({
       id: state.id,
@@ -330,11 +330,11 @@ export default Plugin.define({
     ) => {
       const current = configuredEndpoint()
       const { endpoint: existing, ...rest } = share
+      const endpoint = normalizeEndpoint(existing || current)
       const stored: StoredShare = {
         ...rest,
-        ...(existing || current ? { endpoint: existing ?? current } : {}),
+        ...(endpoint ? { endpoint } : {}),
       }
-      const endpoint = storedEndpoint(stored, current)
       const storageKey = shareKey(endpoint, stored.directory, sessionID)
       const previous = shares.get(sessionID)
 
