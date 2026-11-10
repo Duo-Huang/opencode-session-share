@@ -4,6 +4,35 @@ import type { useDirectory } from "../hooks/use-directory"
 import { formatDate } from "../lib/format"
 import { highlightPreview } from "../lib/preview"
 
+function DirectoryEntry(props: {
+  label: string
+  time: number
+  preview: string
+  active?: boolean
+  highlighted?: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      class="directory-entry"
+      data-active={props.active ? true : undefined}
+      onClick={props.onClick}
+    >
+      <span class="directory-entry-head">
+        <span class="directory-entry-role">{props.label}</span>
+        <span class="directory-entry-time">{formatDate(props.time)}</span>
+      </span>
+      <Show
+        when={props.highlighted !== undefined}
+        fallback={<span class="directory-entry-preview">{props.preview}</span>}
+      >
+        <span class="directory-entry-preview" innerHTML={props.highlighted} />
+      </Show>
+    </button>
+  )
+}
+
 export function Directory(props: {
   directory: ReturnType<typeof useDirectory>
   shareId: string
@@ -88,21 +117,16 @@ export function Directory(props: {
                 fallback={
                   <For each={directory.items()}>
                     {(item) => (
-                      <button
-                        type="button"
-                        class="directory-entry"
-                        data-active={directory.activeId() === item.id ? true : undefined}
+                      <DirectoryEntry
+                        label={item.label}
+                        time={item.time}
+                        preview={item.preview}
+                        active={directory.activeId() === item.id}
                         onClick={() => {
                           directory.jump(item)
                           directory.setOpen(false)
                         }}
-                      >
-                        <span class="directory-entry-head">
-                          <span class="directory-entry-role">{item.label}</span>
-                          <span class="directory-entry-time">{formatDate(item.time)}</span>
-                        </span>
-                        <span class="directory-entry-preview">{item.preview}</span>
-                      </button>
+                      />
                     )}
                   </For>
                 }
@@ -117,22 +141,13 @@ export function Directory(props: {
                 >
                   <For each={search.results()}>
                     {(result) => (
-                      <button
-                        type="button"
-                        class="directory-entry"
+                      <DirectoryEntry
+                        label={result.role === "user" ? "You" : "Agent"}
+                        time={result.time}
+                        preview={result.preview}
+                        highlighted={highlightPreview(result.preview, search.query())}
                         onClick={() => jumpSearchResult(result)}
-                      >
-                        <span class="directory-entry-head">
-                          <span class="directory-entry-role">
-                            {result.role === "user" ? "You" : "Agent"}
-                          </span>
-                          <span class="directory-entry-time">{formatDate(result.time)}</span>
-                        </span>
-                        <span
-                          class="directory-entry-preview"
-                          innerHTML={highlightPreview(result.preview, search.query())}
-                        />
-                      </button>
+                      />
                     )}
                   </For>
                 </Show>

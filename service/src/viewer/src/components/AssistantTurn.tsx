@@ -1,6 +1,11 @@
 import { Key } from "@solid-primitives/keyed"
 import { createMemo, Show } from "solid-js"
-import type { AssistantBlock, AssistantEntry } from "../lib/types"
+import type {
+  AssistantActivityBlock,
+  AssistantBlock,
+  AssistantEntry,
+  AssistantTextBlock,
+} from "../lib/types"
 import { formatCost, formatDate, formatNumber } from "../lib/format"
 import { buildAssistantBlocks, turnMeta } from "../lib/turns"
 import { ActivityGroup } from "./ActivityGroup"
@@ -34,7 +39,7 @@ export function AssistantTurn(props: {
       <Key each={blocks()} by={blockKey}>
         {(block) => {
           if (block().kind === "text") {
-            const text = block as () => Extract<AssistantBlock, { kind: "text" }>
+            const text = block as () => AssistantTextBlock
             return (
               <TextPart
                 id={text().id}
@@ -45,7 +50,7 @@ export function AssistantTurn(props: {
             )
           }
 
-          const activity = block as () => Extract<AssistantBlock, { kind: "activity" }>
+          const activity = block as () => AssistantActivityBlock
           return (
             <ActivityGroup
               block={activity()}

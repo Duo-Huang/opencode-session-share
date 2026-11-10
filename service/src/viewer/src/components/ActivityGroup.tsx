@@ -1,14 +1,18 @@
 import { Key } from "@solid-primitives/keyed"
 import { Show } from "solid-js"
 import { useDisclosure } from "../hooks/use-disclosure"
-import type { AssistantActivityPart, AssistantBlock } from "../lib/types"
+import type {
+  AssistantActivityBlock,
+  AssistantReasoningEntry,
+  AssistantToolEntry,
+} from "../lib/types"
 import { formatDuration } from "../lib/format"
 import { ReasoningPart } from "./ReasoningPart"
 import { SparklesIcon, TerminalIcon } from "./icons"
 import { ToolCard } from "./ToolCard"
 
 export function ActivityGroup(props: {
-  block: Extract<AssistantBlock, { kind: "activity" }>
+  block: AssistantActivityBlock
   shareId: string
   running?: boolean
 }) {
@@ -57,12 +61,11 @@ export function ActivityGroup(props: {
           {(entry) => {
             const part = entry().part
             if (part.type === "reasoning") {
-              const reasoning = () =>
-                entry().part as Extract<AssistantActivityPart["part"], { type: "reasoning" }>
+              const reasoning = entry as () => AssistantReasoningEntry
               return (
                 <ReasoningPart
-                  text={reasoning().text}
-                  durationMs={reasoning().durationMs}
+                  text={reasoning().part.text}
+                  durationMs={reasoning().part.durationMs}
                   shareId={props.shareId}
                   messageIndex={entry().messageIndex}
                   partIndex={entry().partIndex}
@@ -70,11 +73,10 @@ export function ActivityGroup(props: {
               )
             }
 
-            const tool = () =>
-              entry().part as Extract<AssistantActivityPart["part"], { type: "tool" }>
+            const tool = entry as () => AssistantToolEntry
             return (
               <ToolCard
-                part={tool()}
+                part={tool().part}
                 shareId={props.shareId}
                 messageIndex={entry().messageIndex}
                 partIndex={entry().partIndex}

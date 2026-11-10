@@ -49,6 +49,16 @@ export type AssistantBlock =
       durationMs: number
     }
 
+export type AssistantTextBlock = Extract<AssistantBlock, { kind: "text" }>
+export type AssistantActivityBlock = Extract<AssistantBlock, { kind: "activity" }>
+
+export type AssistantReasoningEntry = AssistantActivityPart & {
+  part: Extract<AssistantActivityPart["part"], { type: "reasoning" }>
+}
+export type AssistantToolEntry = AssistantActivityPart & {
+  part: Extract<AssistantActivityPart["part"], { type: "tool" }>
+}
+
 export type TurnItem =
   | { kind: "assistant"; key: string; index: number; messages: AssistantEntry[] }
   | { kind: "message"; key: string; index: number; message: ShareMessage }
