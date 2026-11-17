@@ -47,6 +47,10 @@ docker compose -f compose.ghcr.yml up -d
 
 Set `SHARE_VERSION=v0.3.5` in `.env` to pin the image.
 
+Plugin-only releases (`plugin-vX.Y.Z`) do not change the service image, so
+there is nothing to bump here. Full and service-only releases publish a new
+image.
+
 Check:
 
 ```bash
