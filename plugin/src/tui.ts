@@ -1,5 +1,6 @@
 import { Plugin } from "@opencode/plugin/tui"
 import { spawn } from "node:child_process"
+import { retryOnce } from "./retry"
 import { SessionShareRpc } from "./rpc"
 
 type Prepared = {
@@ -75,7 +76,10 @@ export default Plugin.define({
 
             try {
               const rpc = context.client.rpc(SessionShareRpc)
-              const prepared = (await rpc.prepareShare({ sessionID })) as Prepared
+              // OpenCode briefly unregisters plugin RPC while reloading plugins.
+              const prepared = (await retryOnce(() =>
+                rpc.prepareShare({ sessionID }),
+              )) as Prepared
               if (prepared.share) {
                 await copyAndToast(context, prepared.share.url)
                 return
