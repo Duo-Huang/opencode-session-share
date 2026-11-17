@@ -1,11 +1,13 @@
 name: Release
 
 # Full release:        vX.Y.Z          -> image + npm
+# Plugin-only:         plugin-vX.Y.Z   -> npm only
 # Service-only:        service-vX.Y.Z  -> image only
 on:
   push:
     tags:
       - "v*"
+      - "plugin-v*"
       - "service-v*"
 
 permissions:
@@ -34,18 +36,42 @@ jobs:
           fi
 
           changed="$(
-            git diff --name-only "$previous".."$GITHUB_REF_NAME" -- plugin/src plugin/package.json \
+            git diff --name-only "$previous".."$GITHUB_REF_NAME" -- plugin/src plugin/package.json shared \
               | grep -v '\.test\.ts$' || true
           )"
 
           if [ -n "$changed" ]; then
-            echo "::error::plugin runtime changed since $previous; use a full vX.Y.Z release"
+            echo "::error::plugin or shared types changed since $previous; use a full vX.Y.Z release"
+            printf '%s\n' "$changed"
+            exit 1
+          fi
+
+      - name: Guard plugin-only release
+        if: startsWith(github.ref_name, 'plugin-')
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! previous="$(git describe --tags --abbrev=0 "$GITHUB_REF_NAME^" 2>/dev/null)"; then
+            echo "::error::cannot determine the previous release tag"
+            exit 1
+          fi
+
+          changed="$(
+            git diff --name-only "$previous".."$GITHUB_REF_NAME" -- service shared Dockerfile .dockerignore compose.yml compose.ghcr.yml \
+              | grep -v '\.test\.ts$' || true
+          )"
+
+          if [ -n "$changed" ]; then
+            echo "::error::service or deployment code changed since $previous; use a full vX.Y.Z release"
             printf '%s\n' "$changed"
             exit 1
           fi
 
   image:
     needs: guard
+    # Plugin-only releases publish npm only.
+    if: ${{ !startsWith(github.ref_name, 'plugin-') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -89,7 +115,7 @@ jobs:
 
   npm:
     needs: guard
-    # service-v* releases only publish the image.
+    # Full and plugin-only releases publish npm; service-only does not.
     if: ${{ !startsWith(github.ref_name, 'service-') }}
     runs-on: ubuntu-latest
     defaults:
@@ -112,7 +138,8 @@ jobs:
 
       - name: Check tag matches package version
         run: |
-          tag="${GITHUB_REF_NAME#v}"
+          tag="${GITHUB_REF_NAME#plugin-v}"
+          tag="${tag#v}"
           version="$(node -p "require('./package.json').version")"
           echo "tag=$tag package=$version"
           test "$tag" = "$version"

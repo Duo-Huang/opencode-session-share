@@ -78,17 +78,23 @@ Releases are maintainer-only. Use the smallest release that matches the change:
 
 | Change | Tag | Image | npm |
 |---|---|---|---|
-| Plugin/TUI behavior, protocol, or both sides | `vX.Y.Z` | yes | yes |
+| Plugin and service, protocol, or both sides | `vX.Y.Z` | yes | yes |
+| Plugin/TUI only | `plugin-vX.Y.Z` | no | yes |
 | Viewer/service only | `service-vX.Y.Z` | yes | no |
 | Docs, CI, or repo metadata only | — | no | no |
 
 A viewer/service change still ships a new image. Your own deployment pulls the
 same GHCR artifact as self-hosters.
 
-A `service-vX.Y.Z` tag is invalid if any non-test file under `plugin/src/` or
-`plugin/package.json` changed since the previous release tag. Use a full
-`vX.Y.Z` release instead. The release workflow checks this before building or
-publishing.
+A `service-vX.Y.Z` tag is invalid if any non-test file under `plugin/src/`,
+`plugin/package.json`, or `shared/` changed since the previous release tag.
+
+A `plugin-vX.Y.Z` tag is invalid if any non-test file under `service/`,
+anything under `shared/`, the Docker build inputs (`Dockerfile`,
+`.dockerignore`), or the deployment compose files changed since the previous
+release tag. Use a full `vX.Y.Z` release when both sides changed or when the
+correct classification is unclear. The release workflow checks these guards
+before building or publishing.
 
 Land the release commit on `main` through a pull request, then tag the merged
 commit:
@@ -96,23 +102,33 @@ commit:
 ```bash
 git switch main
 git pull
-git tag vX.Y.Z
-git push origin vX.Y.Z
+git tag vX.Y.Z          # full release
+git tag plugin-vX.Y.Z   # plugin-only release
+git tag service-vX.Y.Z  # service-only release
+git push origin <tag>
 ```
 
 Full release: bump `plugin/package.json` to `X.Y.Z` in the pull request first,
 then use tag `vX.Y.Z`.
 
+Plugin-only release: bump `plugin/package.json` to `X.Y.Z` in the pull
+request, leave the service unchanged, then use tag `plugin-vX.Y.Z`.
+
 Service-only release: leave `plugin/package.json` unchanged, then use tag
 `service-vX.Y.Z`.
 
-Both tags build and publish the multi-arch GHCR image and update `latest`.
-Full releases also publish `opencode-session-share-plugin` to npm through
-Trusted Publishing (OIDC); the workflow checks that `vX.Y.Z` matches
-`plugin/package.json`. No `NPM_TOKEN` is required.
+Full releases build and publish both the multi-arch GHCR image and the npm
+plugin through Trusted Publishing (OIDC). Plugin-only releases publish npm
+only; service-only releases publish the image only. The workflow checks that
+the full or plugin-only tag version matches `plugin/package.json`. No
+`NPM_TOKEN` is required.
 
-Do not reuse the same `X.Y.Z` for both a service-only and a full release.
-Service-only tags leave `plugin/package.json` unchanged.
+Plugin-only releases do not move the image or `latest`; the service stays at
+the last full or service-only release. Service-only releases do not move npm
+`latest`; the plugin stays at the last full or plugin-only release.
+
+Do not reuse the same `X.Y.Z` across release types. Tags are immutable: cut a
+new version instead of moving or deleting a published tag.
 
 ### Manual npm fallback
 
@@ -142,7 +158,7 @@ Use normal 2FA. Do not create or share bypass-2FA tokens.
 
 Do not force-push or delete `main`. Treat release tags as immutable: cut a new
 version instead of moving or deleting a published tag. Only maintainers can
-create `v*` and `service-v*` tags.
+create `v*`, `plugin-v*`, and `service-v*` tags.
 
 ## Pull requests
 
