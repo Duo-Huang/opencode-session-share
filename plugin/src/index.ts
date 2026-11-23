@@ -13,6 +13,12 @@ import {
 } from "./client"
 import { normalizeSession } from "./normalize"
 import {
+  needsCatchUp,
+  persistedRunning,
+  sessionMarker,
+  sessionTime,
+} from "./session-state"
+import {
   endpointFromShareUrl,
   normalizeEndpoint,
   parseShareKey,
@@ -34,6 +40,7 @@ type ShareState = StoredShare & {
   dirty: boolean
   syncing: boolean
   lastEventAt?: number
+  lastSyncedMarker?: number
 }
 
 type StoredShareItem = {
@@ -90,27 +97,6 @@ const RELEVANT_EVENTS = new Set<string>([
   "session.revert.committed",
 ])
 
-const millis = (value: unknown) => {
-  if (typeof value === "number") return value
-  if (value instanceof Date) return value.getTime()
-  if (value && typeof value === "object") {
-    const record = value as { epochMillis?: unknown; epochMilliseconds?: unknown }
-    if (typeof record.epochMillis === "number") return record.epochMillis
-    if (typeof record.epochMilliseconds === "number") return record.epochMilliseconds
-  }
-  return undefined
-}
-
-// The same persisted state that backs the TUI's loading indicator: the
-// execution projector writes `time.busy` on session.execution.started and
-// `time.idle` on the terminal events.
-const persistedRunning = (info: unknown) => {
-  const time = (info as { time?: { busy?: unknown; idle?: unknown } } | undefined)?.time
-  const busy = millis(time?.busy)
-  if (busy === undefined) return undefined
-  return busy > (millis(time?.idle) ?? 0)
-}
-
 export default Plugin.define({
   id: "opencode-session-share",
   async setup(ctx) {
@@ -118,6 +104,8 @@ export default Plugin.define({
     const shares = new Map<string, ShareState>()
     const busySessions = new Map<string, boolean>()
     const controller = new AbortController()
+    let stopped = false
+    let catchUpRunning = false
 
     const configuredEndpoint = () => {
       try {
@@ -223,7 +211,8 @@ export default Plugin.define({
         (info as { location?: { directory?: string } }).location?.directory ??
         fallbackDirectory
       const messages = (await ctx.session.context({ sessionID })) as readonly any[]
-      const persisted = persistedRunning(info)
+      const time = sessionTime(info)
+      const persisted = persistedRunning(time)
 
       // The persisted projector state is authoritative when it is idle.
       // A stale in-memory busy flag must not keep a stopped session running.
@@ -240,6 +229,7 @@ export default Plugin.define({
           running,
         ),
         sessionDirectory,
+        sessionMarker: sessionMarker(time),
       }
     }
 
@@ -267,7 +257,7 @@ export default Plugin.define({
 
     const flush = async (sessionID: string) => {
       const state = shares.get(sessionID)
-      if (!state) return
+      if (!state || stopped) return
       if (state.syncing) {
         state.dirty = true
         return
@@ -279,9 +269,17 @@ export default Plugin.define({
       state.syncing = true
       state.dirty = false
       try {
-        const { snapshot } = await readSnapshot(sessionID, state.directory)
+        const { snapshot, sessionMarker: marker } = await readSnapshot(
+          sessionID,
+          state.directory,
+        )
         await syncShare(state.id, state.privateKey, snapshot, pluginOptions)
+        if (marker !== undefined) {
+          const current = shares.get(sessionID)
+          if (current) current.lastSyncedMarker = marker
+        }
       } catch (error) {
+        if (stopped) return
         const status = (error as Error & { status?: number }).status
         if (
           status === 401 ||
@@ -298,13 +296,13 @@ export default Plugin.define({
           error: error instanceof Error ? error.message : String(error),
         })
         const current = shares.get(sessionID)
-        if (current) {
+        if (current && !stopped) {
           current.timer = setTimeout(() => void flush(sessionID), 3000)
           current.timer.unref?.()
         }
       } finally {
         state.syncing = false
-        if (state.dirty) {
+        if (!stopped && state.dirty) {
           state.dirty = false
           void flush(sessionID)
         }
@@ -313,7 +311,7 @@ export default Plugin.define({
 
     const schedule = (sessionID: string, immediate = false) => {
       const state = shares.get(sessionID)
-      if (!state) return
+      if (!state || stopped) return
       if (immediate) {
         void flush(sessionID)
         return
@@ -321,6 +319,36 @@ export default Plugin.define({
       if (state.timer) return
       state.timer = setTimeout(() => void flush(sessionID), 1000)
       state.timer.unref?.()
+    }
+
+    // Safety net for a missed or half-open OpenCode event stream. Only idle
+    // sessions are checked so normal streaming stays entirely event-driven.
+    const catchUp = async () => {
+      if (stopped || catchUpRunning) return
+      catchUpRunning = true
+      try {
+        for (const [sessionID, state] of [...shares]) {
+          if (stopped) return
+          if (shares.get(sessionID) !== state) continue
+          if (state.expiresAt <= Date.now() || state.syncing || state.timer) continue
+
+          const info = await ctx.session.get({ sessionID }).catch(() => undefined)
+          if (stopped || !info || shares.get(sessionID) !== state) continue
+
+          const time = sessionTime(info)
+          const marker = sessionMarker(time)
+          if (needsCatchUp(state.lastSyncedMarker, marker, persistedRunning(time))) {
+            console.info("session-share catch-up", {
+              sessionID,
+              marker,
+              lastSyncedMarker: state.lastSyncedMarker,
+            })
+            schedule(sessionID, true)
+          }
+        }
+      } finally {
+        catchUpRunning = false
+      }
     }
 
     const rememberShare = async (
@@ -360,6 +388,7 @@ export default Plugin.define({
         dirty: false,
         syncing: false,
         lastEventAt: previous?.lastEventAt,
+        lastSyncedMarker: previous?.lastSyncedMarker,
       })
     }
 
@@ -502,10 +531,11 @@ export default Plugin.define({
         if (!allowed) throw new Error("Share consent required")
         if (consent === true) await ctx.storage.set(SHARE_CONSENT_KEY, true)
 
-        const { snapshot, sessionDirectory } = await readSnapshot(
-          sessionID,
-          ctx.location.directory,
-        )
+        const {
+          snapshot,
+          sessionDirectory,
+          sessionMarker: marker,
+        } = await readSnapshot(sessionID, ctx.location.directory)
         if (!snapshot.messages.length) {
           throw new Error("Session has no shareable messages yet")
         }
@@ -521,6 +551,8 @@ export default Plugin.define({
           endpoint: configuredEndpoint() || undefined,
         }
         await rememberShare(sessionID, stored)
+        const state = shares.get(sessionID)
+        if (state && marker !== undefined) state.lastSyncedMarker = marker
 
         // The initial upload is bounded for latency. If it was compacted, upload
         // the full snapshot once now; this is a one-shot completion, not a
@@ -579,7 +611,7 @@ export default Plugin.define({
       await Promise.all(
         [...shares.keys()].map(async (sessionID) => {
           const info = await ctx.session.get({ sessionID }).catch(() => undefined)
-          const running = persistedRunning(info)
+          const running = persistedRunning(sessionTime(info))
           if (running === true) {
             busySessions.set(sessionID, true)
             schedule(sessionID, true)
@@ -642,8 +674,8 @@ export default Plugin.define({
         await new Promise((resolve) => setTimeout(resolve, 3000))
         await hydrateRunning()
 
-        // One-time catch-up after reconnect, only for shares that were active
-        // shortly before the disconnect. Idle shares are never polled.
+        // One-time catch-up after reconnect for shares that were active shortly
+        // before the disconnect. The maintenance timer handles idle shares.
         const cutoff = Date.now() - 10 * 60_000
         for (const [sessionID, state] of shares) {
           if (state.lastEventAt && state.lastEventAt >= cutoff) schedule(sessionID)
@@ -651,21 +683,22 @@ export default Plugin.define({
       }
     })()
 
-    // Intentionally no heartbeat. Sync is event-driven; an idle session never
-    // uploads. The reconnect path above performs a one-time catch-up for shares
-    // that were recently active. Revisit only if OpenCode's event stream proves
-    // lossy or half-open. This timer only removes expired local metadata.
-    const expiryTimer = setInterval(() => {
+    // Event-driven sync is the fast path. This maintenance timer expires local
+    // metadata and performs a low-frequency catch-up so a missed or half-open
+    // event stream cannot leave a share stale until the next plugin reload.
+    const maintenanceTimer = setInterval(() => {
       const current = Date.now()
       for (const [sessionID, state] of shares) {
         if (state.expiresAt <= current) void forgetShare(sessionID, state.directory)
       }
+      void catchUp()
     }, 60_000)
-    expiryTimer.unref?.()
+    maintenanceTimer.unref?.()
 
     return async () => {
+      stopped = true
       controller.abort()
-      clearInterval(expiryTimer)
+      clearInterval(maintenanceTimer)
       for (const sessionID of [...shares.keys()]) stopState(sessionID)
       await registration.dispose()
     }

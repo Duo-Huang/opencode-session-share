@@ -44,6 +44,7 @@
     "src/normalize.ts",
     "src/retry.ts",
     "src/rpc.ts",
+    "src/session-state.ts",
     "src/storage.ts",
     "src/tui.ts",
     "src/types.ts",
