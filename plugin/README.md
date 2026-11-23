@@ -63,12 +63,12 @@ Then run `/reload`, or `opencode service restart` if the TUI did not pick it up.
 
 `opencode plugin update` updates the installed npm package but does **not** modify `options` in `opencode.jsonc`. Your endpoint, keyId, and key stay as configured.
 
-v0.3.5 retries the `/share` preparation once while OpenCode is reloading plugins, avoiding a transient startup error. It also includes the v0.3.4 streaming, tail-follow, endpoint-storage, turn-count, and theme fixes. It requires service API version 3; upgrade the service and plugin together.
+v0.3.6 adds a low-frequency catch-up for shared sessions, so a missed or half-open event stream cannot leave a public share stale until the next TUI/workspace reload. Normal streaming updates remain event-driven, and idle shares are only checked once a minute. This is a plugin-only release; it requires service API version 3 and does not change the service image.
 
 If you pin an exact version:
 
 ```jsonc
-"package": "opencode-session-share-plugin@0.3.5"
+"package": "opencode-session-share-plugin@0.3.6"
 ```
 
 `opencode plugin update` skips it. Change the version manually to upgrade.
