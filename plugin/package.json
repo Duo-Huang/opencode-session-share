@@ -1,6 +1,6 @@
 {
   "name": "opencode-session-share-plugin",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "Share an OpenCode session through a self-hosted read-only viewer",
   "type": "module",
   "license": "MIT",
@@ -44,6 +44,7 @@
     "src/normalize.ts",
     "src/retry.ts",
     "src/rpc.ts",
+    "src/session-state.ts",
     "src/storage.ts",
     "src/tui.ts",
     "src/types.ts",
